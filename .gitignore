@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+.venv/
+logs/
+cache/
+maps/*.pgm
+maps/*.yaml
+maps/*.json
+compiled_tasks.json
+results/

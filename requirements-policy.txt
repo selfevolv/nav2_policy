@@ -1,0 +1,6 @@
+# Python-only dependencies used by the Runner WebSocket Policy.
+# ROS 2, Nav2 and Isaac Sim are system/runtime dependencies documented in
+# DEPENDENCIES.md and must not be installed from this file.
+msgpack==1.2.2
+numpy==1.26.4
+websockets==16.1.1

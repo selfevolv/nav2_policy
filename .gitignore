@@ -9,3 +9,4 @@ maps/*.yaml
 maps/*.json
 compiled_tasks.json
 results/
+results_*/

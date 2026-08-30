@@ -1,0 +1,20 @@
+{
+  "schema": "m20-nav2-task-config/v1",
+  "task_id": "Q15",
+  "nav2": {
+    "params_file": "../profiles/nav2_default_v1.yaml",
+    "params_sha256": "13eb68d87e1d27901315188edf381a4c2a3841dcb50b8c65113b573f36451ec6"
+  },
+  "runner": {
+    "vla_action_hz": 5
+  },
+  "regression": {
+    "navigation_status": "unverified",
+    "navigation_locked": false,
+    "scope": "navigation_stage",
+    "baseline_run": null,
+    "minimum_distance_m": null,
+    "acceptance_distance_m": null,
+    "evidence": null
+  }
+}

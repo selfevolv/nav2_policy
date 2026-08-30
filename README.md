@@ -36,10 +36,12 @@ Runner observation
 
 ```text
 nav2_policy/
-├── config/nav2_params.yaml       # SmacPlanner2D + MPPI Omni 参数
+├── config/profiles/              # 只增不改的版本化 Nav2 参数 profile
+├── config/tasks/Q01.json…Q24.json # 每题独立配置、频率与回归锁
 ├── launch/m20_nav2.launch.py     # 独立地图服务器和 Nav2 bringup
 ├── scripts/                      # 启停、单题和批量执行器
 ├── compile_tasks.py              # 编译 Q01–Q24 公开路线
+├── task_config.py                # 独立配置及 profile SHA-256 校验
 ├── check_nav2_ready.py           # Lifecycle/Action Server 无目标预检
 ├── generate_usd_maps.py          # Isaac Sim USD 碰撞几何投影建图
 ├── navigation_bridge.py          # Runner 状态、TF/Odom、Nav2 Action 桥
@@ -102,9 +104,25 @@ python compile_tasks.py \
 ```
 
 命令必须输出 `COMPILED_TASKS=24`。生成文件含绝对数据路径，因此不提交到 Git；每次
-部署都必须在目标服务器重新生成。任务表同时保存任务级导航阈值和动作频率。
+部署都必须在目标服务器重新生成。任务表保存公开路线、导航阈值和官方运行上限；可调
+动作频率由每题自己的 `config/tasks/Qxx.json` 提供。
 
-### 4. 使用 Isaac Sim USD 建图
+### 4. 校验每题独立配置
+
+```bash
+python3 task_config.py validate-all
+```
+
+必须输出 `VALID_TASK_CONFIGS=24`。每个任务配置包含自己的动作频率、Nav2 profile 引用、
+profile SHA-256 和导航回归基线。Q01、Q04、Q14、Q19 当前标记为导航锁定，其中 Q01 是
+旧批次历史成功证据，Q04/Q14/Q19 是 2026-08-30 正式 Runner 成功证据。
+
+`config/profiles/nav2_default_v1.yaml` 是不可变基线。不得原地修改它；校验器会因 hash
+不匹配拒绝启动。调试失败任务时，应复制成新的版本化 profile，例如
+`nav2_forward_only_v1.yaml`，计算 SHA-256，然后只修改目标任务的 JSON。运行目录还会
+保存实际使用的 `task_config.json` 和 `nav2_params.yaml` 快照。
+
+### 5. 使用 Isaac Sim USD 建图
 
 地图必须由赛题 `environment.json` 指向的 USD 生成：
 
@@ -122,7 +140,7 @@ mkdir -p "$PROJECT_DIR/maps"
 应生成 `warehouse`、`kitchen`、`market` 三组 `.pgm/.yaml/.json` 文件。源 USD 只读，
 不会被脚本修改。
 
-### 5. 协议自测
+### 6. 协议自测
 
 ```bash
 scripts/start_task_stack.sh Q04
@@ -155,7 +173,7 @@ scripts/run_runner_task.sh Q04 <run-id>
 scripts/stop_task_stack.sh Q04
 ```
 
-Runner 参数由单题执行器强制设为：
+Runner 参数由单题执行器和 `config/tasks/Qxx.json` 共同确定：
 
 - `attack-mode=off`；
 - `navigation-mode=vla`；
@@ -170,42 +188,58 @@ Runner 参数由单题执行器强制设为：
 批量运行（默认 Q01–Q24，也可传入任务列表）：
 
 ```bash
-BATCH_ID=<batch-id> scripts/run_all_tasks.sh
-BATCH_ID=<batch-id> scripts/run_all_tasks.sh Q03 Q04 Q05
+scripts/run_all_tasks.sh
+scripts/run_all_tasks.sh Q03 Q04 Q05
 ```
+
+每次命令都会独占一个精确到纳秒的目录，例如
+`results_20260830_153012_123456789/`；如果目录已经存在，执行器直接拒绝运行，绝不把
+新结果混入旧结果。
 
 长批次可脱离 SSH 运行：
 
 ```bash
-BATCH_ID="nav2_batch_$(date +%Y%m%d_%H%M%S)"
-LOG="$PROJECT_DIR/results/batches/$BATCH_ID.log"
-mkdir -p "$PROJECT_DIR/results/batches"
+RUN_TIMESTAMP="$(date +%Y%m%d_%H%M%S_%N)"
+LOG="$PROJECT_DIR/logs/batches/results_$RUN_TIMESTAMP.log"
+mkdir -p "$PROJECT_DIR/logs/batches"
 
-nohup setsid env BATCH_ID="$BATCH_ID" \
+nohup setsid env RUN_TIMESTAMP="$RUN_TIMESTAMP" \
   "$PROJECT_DIR/scripts/run_all_tasks.sh" \
   >"$LOG" 2>&1 < /dev/null &
 
-echo $! >"$PROJECT_DIR/results/batches/$BATCH_ID.pid"
+echo $! >"$PROJECT_DIR/logs/batches/results_$RUN_TIMESTAMP.pid"
 ```
 
 检查后台批次：
 
 ```bash
-ps -p "$(cat results/batches/<batch-id>.pid)"
-tail -f results/batches/<batch-id>.log
+ps -p "$(cat logs/batches/results_<timestamp>.pid)"
+tail -f logs/batches/results_<timestamp>.log
 ```
 
-每个任务的 `results/Qxx/<run-id>/` 保存 Runner/Nav2/Policy 日志、导航状态、运行摘要
-及预览视频。可提交文件对位于：
+结果按“一次执行一个事务目录”组织，不再按任务长期累加不同 run-id：
 
 ```text
-results/Qxx/<run-id>/submission/
-├── episode.hdf5
-└── episode.mp4
+results_<YYYYMMDD_HHMMSS_NNNNNNNNN>/
+├── runs.tsv
+├── summary.json
+├── summary.md
+├── Q01/
+│   ├── task_config.json
+│   ├── nav2_params.yaml
+│   ├── episode.mp4
+│   ├── logs/status files…
+│   └── submission/
+│       ├── episode.hdf5
+│       └── episode.mp4
+└── Q02/…
 ```
 
+这样目录名直接标识本次执行，目录内各 Qxx 必定来自同一批次；同一 Qxx 不会再出现多个
+难以区分的历史子目录。旧 `results/` 只作为历史证据保留，新执行不会再写入其中。
+
 两个文件只在同一次 Runner 运行同时产生且 HDF5 仅含 `/data/demo_0` 时标记
-`submission_ready=1`。批次目录保存 `runs.tsv`、`summary.json` 和 `summary.md`。
+`submission_ready=1`。
 `video_kind=runner_episode` 表示官方仿真录像；只有 Runner 在录像器启动前失败时才生成
 明确标记的 `diagnostic_placeholder`，后者不会计为导航成功。
 

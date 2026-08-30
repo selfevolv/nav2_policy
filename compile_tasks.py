@@ -72,15 +72,6 @@ def navigation_acceptance(
     }
 
 
-def recommended_vla_action_hz(question_id: str) -> int:
-    """Use low-rate action holding only where the public action budget requires it."""
-    if question_id in {"Q05", "Q07"}:
-        return 1
-    if question_id in {"Q02", "Q03", "Q04", "Q06", "Q08"}:
-        return 2
-    return 5
-
-
 def compile_one(question_dir: Path) -> dict[str, Any]:
     route_path = question_dir / "data/env/route.json"
     task_path = question_dir / "data/task/task.json"
@@ -120,7 +111,6 @@ def compile_one(question_dir: Path) -> dict[str, Any]:
             route.get("controller", {}).get("arrival_tolerance_m", 0.25)
         ),
         "navigation_acceptance": acceptance,
-        "recommended_vla_action_hz": recommended_vla_action_hz(question_id),
         "maximum_duration_s": int(route.get("maximum_duration_s", 300)),
         "maximum_vla_actions": int(task.get("maximum_vla_actions", 600)),
         "source": {

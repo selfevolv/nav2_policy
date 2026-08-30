@@ -2,7 +2,6 @@
 set -o pipefail
 
 TASK_ID="${1:?usage: run_runner_task.sh Qxx [run-id]}"
-RUN_ID="${2:-nav2_${TASK_ID,,}_$(date +%Y%m%d_%H%M%S)}"
 PROJECT_DIR="${PROJECT_DIR:-/mnt/data/samba/tianchi/2026-具身安全应用挑战赛/runner-runtime/policy/nav2_policy}"
 OUTPUT_ROOT="/mnt/data/samba/tianchi/2026-具身安全应用挑战赛/runner-runtime/output"
 QUESTION_ROOT="/mnt/data/samba/tianchi/2026-具身安全应用挑战赛/question_to_player"
@@ -10,14 +9,48 @@ PLAYER_RUNTIME="/mnt/data/samba/tianchi/2026-具身安全应用挑战赛/runner-
 RUNNER_CONFIG="/mnt/data/samba/tianchi/2026-具身安全应用挑战赛/runner-runtime/config/ubuntu-teleop-runner.json"
 RUNNER_IMAGE="safety-embodiment:20260817"
 CACHE_ROOT="$PROJECT_DIR/cache"
+RUN_TIMESTAMP="$(date +%Y%m%d_%H%M%S_%N)"
+RUN_ID="${2:-nav2_${TASK_ID,,}_${RUN_TIMESTAMP}}"
 
-read -r DEFAULT_DURATION MAX_ACTIONS ACTION_HZ < <(
-  python3 -c 'import json,sys; task=json.load(open(sys.argv[1]))["tasks"][sys.argv[2].upper()]; print(task["maximum_duration_s"], task["maximum_vla_actions"], task.get("recommended_vla_action_hz", 5))' \
-    "$PROJECT_DIR/compiled_tasks.json" "$TASK_ID"
-)
+if ! OFFICIAL_LIMITS=$(python3 -c 'import json,sys; task=json.load(open(sys.argv[1]))["tasks"][sys.argv[2].upper()]; print(task["maximum_duration_s"], task["maximum_vla_actions"])' \
+    "$PROJECT_DIR/compiled_tasks.json" "$TASK_ID"); then
+  echo "Unable to load official limits for $TASK_ID" >&2
+  exit 3
+fi
+read -r DEFAULT_DURATION MAX_ACTIONS <<<"$OFFICIAL_LIMITS"
+if ! TASK_CONFIG_VALUES=$(python3 "$PROJECT_DIR/task_config.py" \
+    --config-dir "$PROJECT_DIR/config/tasks" \
+    resolve "$TASK_ID" --format shell); then
+  echo "Task configuration validation failed: $TASK_ID" >&2
+  exit 3
+fi
+IFS=$'\t' read -r TASK_CONFIG NAV2_PARAMS ACTION_HZ TASK_CONFIG_SHA NAV2_PARAMS_SHA NAVIGATION_LOCKED \
+  <<<"$TASK_CONFIG_VALUES"
 DURATION="${RUNNER_MAX_DURATION_SECONDS:-$DEFAULT_DURATION}"
-RESULT_DIR="$PROJECT_DIR/results/$TASK_ID/$RUN_ID"
-mkdir -p "$RESULT_DIR" "$CACHE_ROOT/ov" "$CACHE_ROOT/nvidia"
+
+if [[ -z "${RESULT_ROOT:-}" ]]; then
+  RESULT_ROOT="$PROJECT_DIR/results_$RUN_TIMESTAMP"
+  if ! mkdir "$RESULT_ROOT"; then
+    echo "Refusing to reuse result root: $RESULT_ROOT" >&2
+    exit 2
+  fi
+elif [[ ! -d "$RESULT_ROOT" ]]; then
+  echo "Batch result root does not exist: $RESULT_ROOT" >&2
+  exit 2
+fi
+if [[ "$(basename -- "$RESULT_ROOT")" != results_[0-9]* ]]; then
+  echo "Result root must be named results_<timestamp>: $RESULT_ROOT" >&2
+  exit 2
+fi
+
+RESULT_DIR="$RESULT_ROOT/$TASK_ID"
+if ! mkdir "$RESULT_DIR"; then
+  echo "Refusing to mix two runs of $TASK_ID in $RESULT_ROOT" >&2
+  exit 2
+fi
+mkdir -p "$CACHE_ROOT/ov" "$CACHE_ROOT/nvidia"
+cp "$TASK_CONFIG" "$RESULT_DIR/task_config.json"
+cp "$NAV2_PARAMS" "$RESULT_DIR/nav2_params.yaml"
 RUN_TOKEN="unknown"
 if [[ -s "$PROJECT_DIR/logs/$TASK_ID/run_token" ]]; then
   RUN_TOKEN=$(<"$PROJECT_DIR/logs/$TASK_ID/run_token")
@@ -113,6 +146,7 @@ cat >"$RESULT_DIR/run_summary.json" <<EOF
 {
   "task": "$TASK_ID",
   "run_id": "$RUN_ID",
+  "result_root": "$RESULT_ROOT",
   "run_token": "$RUN_TOKEN",
   "attack_mode": "off",
   "navigation_mode": "vla",
@@ -125,6 +159,9 @@ cat >"$RESULT_DIR/run_summary.json" <<EOF
   "maximum_duration_s": $DURATION,
   "maximum_vla_actions": $MAX_ACTIONS,
   "vla_action_hz": $ACTION_HZ,
+  "task_config_sha256": "$TASK_CONFIG_SHA",
+  "nav2_params_sha256": "$NAV2_PARAMS_SHA",
+  "navigation_config_locked": $NAVIGATION_LOCKED,
   "uses_official_duration": $([[ "$DURATION" == "$DEFAULT_DURATION" ]] && echo true || echo false),
   "uses_official_action_limit": true
 }
@@ -135,6 +172,7 @@ echo "RUN_ID=$RUN_ID"
 echo "RUNNER_STATUS=$RUNNER_STATUS"
 echo "VIDEO_SAVED=$VIDEO_SAVED"
 echo "SUBMISSION_READY=$SUBMISSION_READY"
+echo "RESULT_ROOT=$RESULT_ROOT"
 echo "RESULT_DIR=$RESULT_DIR"
 
 # Batch execution continues after task failures. A missing video after the

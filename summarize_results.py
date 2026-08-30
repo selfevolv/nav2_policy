@@ -98,6 +98,7 @@ def main() -> int:
     valid_pairs = sum(row["artifact_valid"] for row in rows)
     summary = {
         "schema": "m20-nav2-batch-summary/v1",
+        "result_root": str(args.batch_tsv.parent.resolve()),
         "tasks_run": len(rows),
         "videos_saved": videos,
         "valid_submission_pairs": valid_pairs,

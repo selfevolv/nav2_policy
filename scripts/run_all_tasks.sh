@@ -3,9 +3,9 @@ set -uo pipefail
 
 PROJECT_DIR="${PROJECT_DIR:-/mnt/data/samba/tianchi/2026-具身安全应用挑战赛/runner-runtime/policy/nav2_policy}"
 SCRIPT_DIR="$PROJECT_DIR/scripts"
-BATCH_ID="${BATCH_ID:-nav2_batch_$(date +%Y%m%d_%H%M%S)}"
-BATCH_DIR="$PROJECT_DIR/results/batches/$BATCH_ID"
-mkdir -p "$BATCH_DIR"
+RUN_TIMESTAMP="${RUN_TIMESTAMP:-$(date +%Y%m%d_%H%M%S_%N)}"
+RESULT_ROOT="${RESULT_ROOT:-$PROJECT_DIR/results_$RUN_TIMESTAMP}"
+BATCH_ID="${BATCH_ID:-nav2_$RUN_TIMESTAMP}"
 
 if (( $# > 0 )); then
   TASKS=("$@")
@@ -16,6 +16,37 @@ else
   done
 fi
 
+SEEN_TASKS=" "
+for REQUESTED_TASK in "${TASKS[@]}"; do
+  REQUESTED_TASK="${REQUESTED_TASK^^}"
+  if [[ ! "$REQUESTED_TASK" =~ ^Q(0[1-9]|1[0-9]|2[0-4])$ ]]; then
+    echo "Invalid task id: $REQUESTED_TASK" >&2
+    exit 2
+  fi
+  if [[ "$SEEN_TASKS" == *" $REQUESTED_TASK "* ]]; then
+    echo "Duplicate task would mix two runs in one directory: $REQUESTED_TASK" >&2
+    exit 2
+  fi
+  SEEN_TASKS+="$REQUESTED_TASK "
+  if ! python3 "$PROJECT_DIR/task_config.py" \
+      --config-dir "$PROJECT_DIR/config/tasks" \
+      resolve "$REQUESTED_TASK" >/dev/null; then
+    echo "Task configuration validation failed: $REQUESTED_TASK" >&2
+    exit 3
+  fi
+done
+
+if [[ "$(basename -- "$RESULT_ROOT")" != results_[0-9]* ]]; then
+  echo "Result root must be named results_<timestamp>: $RESULT_ROOT" >&2
+  exit 2
+fi
+if [[ -e "$RESULT_ROOT" ]]; then
+  echo "Refusing to mix this run with existing results: $RESULT_ROOT" >&2
+  exit 2
+fi
+mkdir "$RESULT_ROOT"
+export RESULT_ROOT
+
 ACTIVE_TASK=""
 cleanup() {
   if [[ -n "$ACTIVE_TASK" ]]; then
@@ -24,7 +55,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-printf 'task\trun_id\texecutor_status\tresult_dir\n' >"$BATCH_DIR/runs.tsv"
+printf 'task\trun_id\texecutor_status\tresult_dir\n' >"$RESULT_ROOT/runs.tsv"
 
 for TASK_ID in "${TASKS[@]}"; do
   TASK_ID="${TASK_ID^^}"
@@ -69,10 +100,10 @@ for TASK_ID in "${TASKS[@]}"; do
     EXECUTOR_STATUS=$?
   fi
 
-  RESULT_DIR="$PROJECT_DIR/results/$TASK_ID/$RUN_ID"
+  RESULT_DIR="$RESULT_ROOT/$TASK_ID"
   printf '%s\t%s\t%s\t%s\n' \
     "$TASK_ID" "$RUN_ID" "$EXECUTOR_STATUS" "$RESULT_DIR" \
-    >>"$BATCH_DIR/runs.tsv"
+      >>"$RESULT_ROOT/runs.tsv"
 
   "$SCRIPT_DIR/stop_task_stack.sh" "$TASK_ID" || true
   ACTIVE_TASK=""
@@ -80,9 +111,9 @@ for TASK_ID in "${TASKS[@]}"; do
 done
 
 python3 "$PROJECT_DIR/summarize_results.py" \
-  --batch-tsv "$BATCH_DIR/runs.tsv" \
-  --output-json "$BATCH_DIR/summary.json" \
-  --output-markdown "$BATCH_DIR/summary.md"
+  --batch-tsv "$RESULT_ROOT/runs.tsv" \
+  --output-json "$RESULT_ROOT/summary.json" \
+  --output-markdown "$RESULT_ROOT/summary.md"
 
 echo "BATCH_ID=$BATCH_ID"
-echo "BATCH_DIR=$BATCH_DIR"
+echo "RESULT_ROOT=$RESULT_ROOT"

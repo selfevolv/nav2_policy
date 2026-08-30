@@ -2,14 +2,18 @@ from __future__ import annotations
 
 import csv
 import json
+import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from compile_tasks import navigation_acceptance, recommended_vla_action_hz
+from compile_tasks import navigation_acceptance
 from summarize_results import main as summarize_main
+from task_config import load_task_config
 
 
 class CompileTaskTests(unittest.TestCase):
@@ -51,10 +55,106 @@ class CompileTaskTests(unittest.TestCase):
         self.assertEqual(result["target_xyz"], [3.0, 4.0])
         self.assertEqual(result["distance_m"], 0.2)
 
-    def test_action_frequency_table(self) -> None:
-        self.assertEqual(recommended_vla_action_hz("Q04"), 2)
-        self.assertEqual(recommended_vla_action_hz("Q05"), 1)
-        self.assertEqual(recommended_vla_action_hz("Q14"), 5)
+
+class TaskConfigTests(unittest.TestCase):
+    config_dir = Path(__file__).resolve().parents[1] / "config/tasks"
+
+    def test_all_tasks_have_valid_independent_manifests(self) -> None:
+        for number in range(1, 25):
+            task_id = f"Q{number:02d}"
+            payload = load_task_config(self.config_dir, task_id)
+            self.assertEqual(payload["task_id"], task_id)
+            self.assertEqual(Path(payload["manifest_path"]).name, f"{task_id}.json")
+
+    def test_task_specific_frequency_and_navigation_locks(self) -> None:
+        self.assertEqual(
+            load_task_config(self.config_dir, "Q04")["runner"]["vla_action_hz"], 2
+        )
+        self.assertEqual(
+            load_task_config(self.config_dir, "Q05")["runner"]["vla_action_hz"], 1
+        )
+        self.assertTrue(
+            load_task_config(self.config_dir, "Q04")["regression"][
+                "navigation_locked"
+            ]
+        )
+        self.assertFalse(
+            load_task_config(self.config_dir, "Q05")["regression"][
+                "navigation_locked"
+            ]
+        )
+
+    def test_profile_hash_blocks_silent_shared_parameter_edits(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            copied_config = Path(temporary) / "config"
+            shutil.copytree(self.config_dir.parent, copied_config)
+            profile = copied_config / "profiles/nav2_default_v1.yaml"
+            profile.write_text(
+                profile.read_text(encoding="utf-8") + "# changed\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "profile hash mismatch"):
+                load_task_config(copied_config / "tasks", "Q04")
+
+    def test_result_layout_has_one_task_directory_per_run_root(self) -> None:
+        project = Path(__file__).resolve().parents[1]
+        single_runner = (project / "scripts/run_runner_task.sh").read_text(
+            encoding="utf-8"
+        )
+        batch_runner = (project / "scripts/run_all_tasks.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('RESULT_DIR="$RESULT_ROOT/$TASK_ID"', single_runner)
+        self.assertIn('RESULT_ROOT/$TASK_ID', batch_runner)
+        self.assertNotIn('results/$TASK_ID/$RUN_ID', single_runner)
+
+    def test_single_runner_creates_new_transaction_root(self) -> None:
+        source_project = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary) / "policy"
+            project.mkdir()
+            shutil.copy2(source_project / "task_config.py", project)
+            shutil.copytree(source_project / "config", project / "config")
+            (project / "compiled_tasks.json").write_text(
+                json.dumps(
+                    {
+                        "tasks": {
+                            "Q04": {
+                                "maximum_duration_s": 240,
+                                "maximum_vla_actions": 400,
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            fake_bin = Path(temporary) / "bin"
+            fake_bin.mkdir()
+            fake_docker = fake_bin / "docker"
+            fake_docker.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+            fake_docker.chmod(0o755)
+            environment = os.environ.copy()
+            environment["PROJECT_DIR"] = str(project)
+            environment["PATH"] = f"{fake_bin}{os.pathsep}{environment['PATH']}"
+            process = subprocess.run(
+                [
+                    "bash",
+                    str(source_project / "scripts/run_runner_task.sh"),
+                    "Q04",
+                    "internal_runner_id",
+                ],
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(process.returncode, 0)
+            roots = list(project.glob("results_*"))
+            self.assertEqual(len(roots), 1)
+            task_result = roots[0] / "Q04"
+            self.assertTrue((task_result / "task_config.json").is_file())
+            self.assertTrue((task_result / "nav2_params.yaml").is_file())
+            self.assertFalse((task_result / "internal_runner_id").exists())
 
 
 class SummaryTests(unittest.TestCase):

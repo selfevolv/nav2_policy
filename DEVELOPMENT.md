@@ -236,3 +236,20 @@
   lifecycle transition race 或数百次 goal rejection。
 - 当前版本不建议直接作为目标 30 分的最终提交：短路线和正向路线可靠，但 Q05 已证明
   长距离反向路线存在系统性速度不足。详细数据与 SHA-256 见 `TEST_REPORT_20260830.md`。
+
+## 2026-08-30：任务配置隔离与运行事务目录
+
+- 新增 `config/tasks/Q01.json` 至 `Q24.json`，每题独立记录 Nav2 profile、动作频率、
+  profile SHA-256、导航状态、锁定状态和基线运行；动作频率不再硬编码在
+  `compile_tasks.py`。
+- Q01 按 2026-08-29 历史成功证据锁定；Q04、Q14、Q19 按 2026-08-30 正式 Runner
+  证据锁定。Q05 保留正式失败基线但不锁定。其他任务在取得可靠成功证据前标为
+  `unverified`。
+- 原 `config/nav2_params.yaml` 移为不可变的
+  `config/profiles/nav2_default_v1.yaml`。`task_config.py` 在启动前核验 profile hash；
+  原地修改共享 profile 会使任务拒绝启动，调参必须新建版本并只切换目标任务。
+- 单题结果同时保存任务清单和 Nav2 参数快照，保证以后能复现该视频实际使用的配置。
+- 新结果结构改为 `results_<精确时间>/<Qxx>/`。每次单题或批量调用只创建一个新的根
+  目录；根目录已存在或同一任务目录已存在时直接失败，避免新旧数据混合。
+- 旧 `results/Qxx/<run-id>/` 不迁移、不删除，只保留为历史证据。官方提交单元仍是每题
+  目录内同次 Runner 生成的 `submission/episode.hdf5 + episode.mp4`。

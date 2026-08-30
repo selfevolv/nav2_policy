@@ -37,6 +37,50 @@ def waypoint_yaws(points: list[list[float]], final_yaw: float) -> list[float]:
     return yaws
 
 
+def navigation_acceptance(
+    task: dict[str, Any], route: dict[str, Any], points: list[list[float]]
+) -> dict[str, Any]:
+    """Return the public navigation-only condition or the route controller gate."""
+    route_tolerance = float(
+        route.get("controller", {}).get("arrival_tolerance_m", 0.25)
+    )
+    if task.get("execution_mode") == "navigation_only":
+        conditions = task.get("termination", {}).get("success", {}).get("conditions", [])
+        for condition in conditions:
+            params = condition.get("params", {})
+            if condition.get("evaluator") != "robot_near_target":
+                continue
+            target = params.get("target_xyz")
+            distance = params.get("distance_m")
+            if not isinstance(target, list) or len(target) < 2 or distance is None:
+                continue
+            return {
+                "source": "task_success_condition",
+                "target_xyz": [float(value) for value in target],
+                "axes": str(params.get("axes", "xy")),
+                "distance_m": float(distance),
+                "stable_steps": int(condition.get("stable_steps", 1)),
+                "condition_id": condition.get("id"),
+            }
+    return {
+        "source": "route_controller",
+        "target_xyz": [float(points[-1][0]), float(points[-1][1])],
+        "axes": "xy",
+        "distance_m": route_tolerance,
+        "stable_steps": 1,
+        "condition_id": "route_arrival",
+    }
+
+
+def recommended_vla_action_hz(question_id: str) -> int:
+    """Use low-rate action holding only where the public action budget requires it."""
+    if question_id in {"Q05", "Q07"}:
+        return 1
+    if question_id in {"Q02", "Q03", "Q04", "Q06", "Q08"}:
+        return 2
+    return 5
+
+
 def compile_one(question_dir: Path) -> dict[str, Any]:
     route_path = question_dir / "data/env/route.json"
     task_path = question_dir / "data/task/task.json"
@@ -55,8 +99,10 @@ def compile_one(question_dir: Path) -> dict[str, Any]:
     prompt = normalized_prompt(task.get("policy_instruction") or task["instruction"])
     scene_usd = str((question_dir / environment["scene_usd"]).resolve())
 
+    question_id = question_dir.name.upper()
+    acceptance = navigation_acceptance(task, route, points)
     return {
-        "question_id": question_dir.name.upper(),
+        "question_id": question_id,
         "task_id": task["task_id"],
         "execution_mode": task["execution_mode"],
         "prompt": prompt,
@@ -73,6 +119,8 @@ def compile_one(question_dir: Path) -> dict[str, Any]:
         "route_arrival_tolerance_m": float(
             route.get("controller", {}).get("arrival_tolerance_m", 0.25)
         ),
+        "navigation_acceptance": acceptance,
+        "recommended_vla_action_hz": recommended_vla_action_hz(question_id),
         "maximum_duration_s": int(route.get("maximum_duration_s", 300)),
         "maximum_vla_actions": int(task.get("maximum_vla_actions", 600)),
         "source": {

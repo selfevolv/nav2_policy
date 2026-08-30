@@ -40,10 +40,13 @@ nav2_policy/
 ├── launch/m20_nav2.launch.py     # 独立地图服务器和 Nav2 bringup
 ├── scripts/                      # 启停、单题和批量执行器
 ├── compile_tasks.py              # 编译 Q01–Q24 公开路线
+├── check_nav2_ready.py           # Lifecycle/Action Server 无目标预检
 ├── generate_usd_maps.py          # Isaac Sim USD 碰撞几何投影建图
 ├── navigation_bridge.py          # Runner 状态、TF/Odom、Nav2 Action 桥
 ├── policy_server.py              # Runner WebSocket Policy
 ├── summarize_results.py          # JSON/Markdown 验收汇总
+├── tests/                         # 任务元数据与验收单元测试
+├── TEST_REPORT_20260830.md        # P0 修改与正式 Runner 测试报告
 ├── requirements-policy.txt       # Policy Python 精确依赖
 └── DEPENDENCIES.md               # ROS/Nav2/Isaac/系统依赖
 ```
@@ -73,7 +76,7 @@ export PROJECT_DIR="$PWD"
 export NAV2_ROOT='/home/youlika/navigation2_reproduction'
 source scripts/env.sh
 
-echo "$ROS_DOMAIN_ID"                 # 42
+echo "$ROS_DOMAIN_ID"                 # 手工环境默认 42
 ros2 pkg prefix nav2_bringup
 ros2 pkg prefix nav2_smac_planner
 ros2 pkg prefix nav2_mppi_controller
@@ -98,7 +101,8 @@ python compile_tasks.py \
   --output "$PROJECT_DIR/compiled_tasks.json"
 ```
 
-命令必须输出 `COMPILED_TASKS=24`。生成的任务表含绝对数据路径，因此默认不提交到 Git。
+命令必须输出 `COMPILED_TASKS=24`。生成文件含绝对数据路径，因此不提交到 Git；每次
+部署都必须在目标服务器重新生成。任务表同时保存任务级导航阈值和动作频率。
 
 ### 4. 使用 Isaac Sim USD 建图
 
@@ -122,6 +126,7 @@ mkdir -p "$PROJECT_DIR/maps"
 
 ```bash
 scripts/start_task_stack.sh Q04
+scripts/check_task_stack.sh Q04 60
 
 python self_test_client.py \
   --task Q04 \
@@ -155,7 +160,9 @@ Runner 参数由单题执行器强制设为：
 - `attack-mode=off`；
 - `navigation-mode=vla`；
 - `base-mode=kinematic`；
-- 5 Hz 观测、录像和动作；
+- 5 Hz 观测与录像；Q01/Q09–Q24 使用 5 Hz 动作，Q02/Q03/Q04/Q06/Q08
+  使用 2 Hz，Q05/Q07 使用 1 Hz；
+- 严格使用公开任务的 `maximum_vla_actions` 和 `maximum_duration_s`，不扩展上限；
 - 动作 3–9 维始终为零；
 - 底盘速度限制为 `vx [-0.25,0.25]`、`vy [-0.12,0.12]`、
   `yaw_rate [-0.30,0.30]`。
@@ -188,13 +195,28 @@ ps -p "$(cat results/batches/<batch-id>.pid)"
 tail -f results/batches/<batch-id>.log
 ```
 
-每个任务的 `results/Qxx/<run-id>/` 保存官方视频、HDF5、Runner/Nav2/Policy 日志、
-导航状态和运行摘要。批次目录保存 `runs.tsv`、`summary.json` 和 `summary.md`。
+每个任务的 `results/Qxx/<run-id>/` 保存 Runner/Nav2/Policy 日志、导航状态、运行摘要
+及预览视频。可提交文件对位于：
+
+```text
+results/Qxx/<run-id>/submission/
+├── episode.hdf5
+└── episode.mp4
+```
+
+两个文件只在同一次 Runner 运行同时产生且 HDF5 仅含 `/data/demo_0` 时标记
+`submission_ready=1`。批次目录保存 `runs.tsv`、`summary.json` 和 `summary.md`。
 `video_kind=runner_episode` 表示官方仿真录像；只有 Runner 在录像器启动前失败时才生成
 明确标记的 `diagnostic_placeholder`，后者不会计为导航成功。
 
-批量执行会在启动 Isaac Sim 前做 Nav2 健康检查：使用公开出生点发布初始 TF，要求
-Nav2 接受公开路线，失败时最多整栈重启三次。真实观测到达前动作仍强制为全零。
+批量执行会在启动 Isaac Sim 前做 Nav2 健康检查：Policy bridge 先发布公开出生点 TF，
+随后要求 8 个 lifecycle 节点全部 ACTIVE 且 `NavigateThroughPoses` Action Server 可用。
+预检绝不发送目标；每次尝试使用新 ROS Domain，失败时最多整栈重启三次。只有收到
+第一帧真实 Runner 观测后才允许提交目标，目标失败最多再尝试两次。
+
+汇总器分别报告文件对有效性与导航成功，不把 `runner_status=0`、占位视频或固定
+`0.5 m` 当作成功。导航-only 题读取正式 `robot_near_target` 条件，其他题使用公开
+route arrival tolerance。
 
 ## 安全停止
 

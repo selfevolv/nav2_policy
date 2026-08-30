@@ -35,18 +35,20 @@ for TASK_ID in "${TASKS[@]}"; do
 
   ACTIVE_TASK="$TASK_ID"
   READY=0
+  PREFLIGHT_LOG="$PROJECT_DIR/logs/$TASK_ID/preflight.log"
+  : >"$PREFLIGHT_LOG"
   for START_ATTEMPT in 1 2 3; do
     "$SCRIPT_DIR/stop_task_stack.sh" "$TASK_ID" || true
-    "$SCRIPT_DIR/start_task_stack.sh" "$TASK_ID"
-    for _ in $(seq 1 30); do
-      if ss -ltn | grep -q ':18022 ' && \
-        python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); raise SystemExit(0 if d.get("goal_accepted") else 1)' \
-          "$PROJECT_DIR/logs/$TASK_ID/navigation_status.json" 2>/dev/null; then
-        READY=1
-        break
-      fi
-      sleep 1
-    done
+    if ! "$SCRIPT_DIR/start_task_stack.sh" "$TASK_ID" \
+        >>"$PREFLIGHT_LOG" 2>&1; then
+      echo "STACK_START_FAILED=$TASK_ID ATTEMPT=$START_ATTEMPT" \
+        | tee -a "$PREFLIGHT_LOG" >&2
+      continue
+    fi
+    if "$SCRIPT_DIR/check_task_stack.sh" "$TASK_ID" 60 \
+        >>"$PREFLIGHT_LOG" 2>&1; then
+      READY=1
+    fi
     if [[ "$READY" -eq 1 ]]; then
       echo "NAV2_PREFLIGHT_READY=$TASK_ID ATTEMPT=$START_ATTEMPT"
       break

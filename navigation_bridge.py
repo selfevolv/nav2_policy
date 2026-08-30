@@ -27,10 +27,14 @@ def yaw_quaternion(yaw: float) -> tuple[float, float, float, float]:
 class NavigationBridge(Node):
     """Publish ground-truth odometry, submit the public route, and sample cmd_vel."""
 
-    def __init__(self, task: dict[str, Any], status_path: Path) -> None:
+    def __init__(
+        self, task: dict[str, Any], status_path: Path, run_token: str = "manual"
+    ) -> None:
         super().__init__("m20_nav2_policy_bridge")
         self.task = task
         self.status_path = status_path
+        self.run_token = run_token
+        self.started_unix_s = time.time()
         self._lock = threading.RLock()
         self._status_write_lock = threading.Lock()
         # Seed TF from the public spawn pose so Nav2 can finish its lifecycle
@@ -45,12 +49,28 @@ class NavigationBridge(Node):
         self._goal_sent = False
         self._goal_attempts = 0
         self._goal_accepted = False
-        self._goal_status = "waiting_for_nav2"
+        self._goal_status = "waiting_for_runner_observation"
         self._goal_result_code: int | None = None
         self._stable_goal_observations = 0
         self._navigation_reached = False
+        self._navigation_stop_requested = False
         self._minimum_goal_distance = float("inf")
+        self._minimum_acceptance_distance = float("inf")
         self._request_count = 0
+        self._maximum_goal_attempts = 3
+        self._goal_terminal_failure = False
+        self._next_goal_attempt_monotonic = 0.0
+        self._route_tolerance = float(task["route_arrival_tolerance_m"])
+        self._acceptance = task.get(
+            "navigation_acceptance",
+            {
+                "source": "route_controller",
+                "target_xyz": task["navigation_goal_xy"],
+                "axes": "xy",
+                "distance_m": self._route_tolerance,
+                "stable_steps": 1,
+            },
+        )
 
         self.odom_publisher = self.create_publisher(Odometry, "/odom", 20)
         self.tf_broadcaster = TransformBroadcaster(self)
@@ -64,6 +84,7 @@ class NavigationBridge(Node):
         self.create_timer(0.05, self._publish_latest_pose)
         self.create_timer(0.5, self._try_send_goal)
         self._publish_map_to_odom()
+        self.write_status()
 
     def _publish_map_to_odom(self) -> None:
         transform = TransformStamped()
@@ -78,19 +99,37 @@ class NavigationBridge(Node):
         if state.shape != (25,) or not np.isfinite(state).all():
             raise ValueError(f"state must be finite float32[25], got {state.shape}")
         goal_x, goal_y = self.task["navigation_goal_xy"]
-        distance = math.hypot(float(state[0]) - goal_x, float(state[1]) - goal_y)
-        tolerance = float(self.task["route_arrival_tolerance_m"])
+        route_distance = math.hypot(
+            float(state[0]) - goal_x, float(state[1]) - goal_y
+        )
+        target = self._acceptance["target_xyz"]
+        axes = str(self._acceptance.get("axes", "xy"))
+        dimensions = 3 if axes == "xyz" and len(target) >= 3 else 2
+        acceptance_distance = math.sqrt(
+            sum(
+                (float(state[index]) - float(target[index])) ** 2
+                for index in range(dimensions)
+            )
+        )
+        acceptance_radius = float(self._acceptance["distance_m"])
         with self._lock:
             self._state = state.copy()
             self._observation_monotonic = time.monotonic()
             self._request_count += 1
-            self._minimum_goal_distance = min(self._minimum_goal_distance, distance)
-            if distance <= tolerance:
+            self._minimum_goal_distance = min(
+                self._minimum_goal_distance, route_distance
+            )
+            self._minimum_acceptance_distance = min(
+                self._minimum_acceptance_distance, acceptance_distance
+            )
+            if acceptance_distance <= acceptance_radius:
+                self._navigation_reached = True
+            if route_distance <= self._route_tolerance:
                 self._stable_goal_observations += 1
             else:
                 self._stable_goal_observations = 0
             if self._stable_goal_observations >= 10:
-                self._navigation_reached = True
+                self._navigation_stop_requested = True
                 self._goal_status = "navigation_reached"
         self.write_status()
 
@@ -132,8 +171,22 @@ class NavigationBridge(Node):
         self.tf_broadcaster.sendTransform(transform)
 
     def _try_send_goal(self) -> None:
+        now = time.monotonic()
         with self._lock:
-            if self._goal_sent or self._state is None:
+            observation_fresh = (
+                self._observation_monotonic is not None
+                and now - self._observation_monotonic <= 0.75
+            )
+            if not observation_fresh:
+                if self._observation_monotonic is None:
+                    self._goal_status = "waiting_for_runner_observation"
+                return
+            if (
+                self._goal_sent
+                or self._state is None
+                or self._goal_terminal_failure
+                or now < self._next_goal_attempt_monotonic
+            ):
                 return
         if not self.action_client.wait_for_server(timeout_sec=0.0):
             with self._lock:
@@ -165,20 +218,31 @@ class NavigationBridge(Node):
             f"Submitted {len(goal.poses)} poses for {self.task['question_id']}"
         )
 
+    def _schedule_goal_retry_locked(self, reason: str) -> None:
+        """Retry a failed action at most twice after the initial request."""
+        self._goal_sent = False
+        self._goal_accepted = False
+        self._last_cmd[:] = 0.0
+        if self._goal_attempts >= self._maximum_goal_attempts:
+            self._goal_terminal_failure = True
+            self._goal_status = f"{reason}_attempts_exhausted"
+            return
+        delay_s = min(4.0, float(2 ** max(0, self._goal_attempts - 1)))
+        self._next_goal_attempt_monotonic = time.monotonic() + delay_s
+        self._goal_status = f"{reason}_retrying"
+
     def _goal_response(self, future: Any) -> None:
         try:
             handle = future.result()
         except Exception as error:
             self.get_logger().warning(f"Goal request failed; retrying: {error}")
             with self._lock:
-                self._goal_sent = False
-                self._goal_status = "goal_request_failed_retrying"
+                self._schedule_goal_retry_locked("goal_request_failed")
             self.write_status()
             return
         if handle is None or not handle.accepted:
             with self._lock:
-                self._goal_sent = False
-                self._goal_status = "goal_rejected_retrying"
+                self._schedule_goal_retry_locked("goal_rejected")
             self.write_status()
             return
         with self._lock:
@@ -194,10 +258,7 @@ class NavigationBridge(Node):
         except Exception as error:
             self.get_logger().warning(f"Goal result failed: {error}")
             with self._lock:
-                self._goal_sent = False
-                self._goal_accepted = False
-                self._goal_status = "goal_result_failed_retrying"
-                self._last_cmd[:] = 0.0
+                self._schedule_goal_retry_locked("goal_result_failed")
             self.write_status()
             return
         code = None if wrapped is None else int(wrapped.status)
@@ -206,9 +267,14 @@ class NavigationBridge(Node):
             if code == 4:
                 self._goal_status = "nav2_succeeded"
                 self._navigation_reached = True
+                self._navigation_stop_requested = True
+            elif self._navigation_reached:
+                self._goal_status = f"navigation_reached_nav2_finished_{code}"
+                self._navigation_stop_requested = True
             else:
-                self._goal_status = f"nav2_finished_{code}"
-            self._last_cmd[:] = 0.0
+                self._schedule_goal_retry_locked(f"nav2_finished_{code}")
+            if self._navigation_stop_requested:
+                self._last_cmd[:] = 0.0
         self.write_status()
 
     def _on_cmd_vel(self, message: Twist) -> None:
@@ -240,7 +306,7 @@ class NavigationBridge(Node):
                 else now - self._last_cmd_monotonic
             )
             safe = (
-                not self._navigation_reached
+                not self._navigation_stop_requested
                 and observation_age is not None
                 and observation_age <= 0.75
                 and command_age is not None
@@ -266,20 +332,32 @@ class NavigationBridge(Node):
             )
             return {
                 "schema": "m20-nav2-policy-status/v1",
+                "run_token": self.run_token,
+                "started_unix_s": self.started_unix_s,
                 "question_id": self.task["question_id"],
                 "scene": self.task["scene"],
                 "goal_xy": self.task["navigation_goal_xy"],
                 "goal_status": self._goal_status,
                 "goal_sent": self._goal_sent,
                 "goal_attempts": self._goal_attempts,
+                "maximum_goal_attempts": self._maximum_goal_attempts,
                 "goal_accepted": self._goal_accepted,
+                "goal_terminal_failure": self._goal_terminal_failure,
                 "goal_result_code": self._goal_result_code,
                 "navigation_reached": self._navigation_reached,
+                "navigation_stop_requested": self._navigation_stop_requested,
+                "navigation_acceptance": self._acceptance,
+                "route_arrival_tolerance_m": self._route_tolerance,
                 "stable_goal_observations": self._stable_goal_observations,
                 "minimum_goal_distance_m": (
                     None
                     if not math.isfinite(self._minimum_goal_distance)
                     else self._minimum_goal_distance
+                ),
+                "minimum_acceptance_distance_m": (
+                    None
+                    if not math.isfinite(self._minimum_acceptance_distance)
+                    else self._minimum_acceptance_distance
                 ),
                 "request_count": self._request_count,
                 "observation_age_s": observation_age,

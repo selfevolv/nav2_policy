@@ -186,3 +186,53 @@
 - Q03–Q24 已改为服务器独立监督进程运行，避免 SSH/对话断开中止。批次 PID 记录在
   `results/batches/nav2_q03_q24_detached_20260829.pid`，总日志为同目录同名前缀 `.log`；
   每题仍由脚本单独保存官方视频与日志。
+
+## 2026-08-30：P0 稳定性修复与正式限额回归
+
+### 对旧结论的隔离复核
+
+- Nav2 单独启动时只有 map server 能激活，controller 会等待 bridge 提供的 TF；因此
+  “先让 Nav2 全部 ACTIVE 再启动 Policy”不可行。
+- 正确顺序改为先启动 bridge 发布合成出生点 TF，再启动 Nav2。合成状态只用于 lifecycle，
+  不再满足发目标条件。
+- 独立 Domain 143 复现了旧缺陷：`request_count=0` 时目标已被接受，随后 controller
+  报 `Failed to make progress`。新代码要求 0.75 秒内存在真实 Runner 观测。
+- 修复后 Q04 隔离预检达到 8/8 lifecycle ACTIVE、Action Server ready，同时保持
+  `goal_attempts=0`、`goal_sent=false`、`request_count=0`。
+
+### 启动与目标状态机修改
+
+- 每次 stack 启动生成新的 `ROS_DOMAIN_ID` 和 `run_token`，启动前删除旧状态文件。
+- `start_task_stack.sh` 等待本次 token 的 bridge 初始状态后才启动 Nav2。
+- 新增 `check_nav2_ready.py`，通过 lifecycle service 和 Action Client 做无目标预检，
+  不再使用可能陈旧的 `goal_accepted`。
+- Action 失败采用最多三次总尝试、1/2 秒退避；到达任务级导航阈值后不再因 Nav2 后续
+  ABORTED 抹掉成功证据。
+- `navigation_reached` 与“停止输出”解耦：第一次进入正式导航阈值即可记录证据，只有
+  route tolerance 连续满足或 Nav2 SUCCEEDED 后才停止底盘命令，避免 Q01 精确终点过早刹车。
+
+### 正式动作预算与提交文件对
+
+- 删除 `duration × action_hz` 自动扩大动作上限的逻辑，严格使用公共任务上限。
+- Runner 已确认低频动作会持续保持，频率必须是 50 的正约数。当前表为：Q05/Q07=1 Hz，
+  Q02/Q03/Q04/Q06/Q08=2 Hz，其余=5 Hz。
+- navigation-only 题从正式 success condition 编译导航半径；操作题使用 route controller
+  arrival tolerance，汇总不再硬编码 0.5 m。
+- 同次 Runner 产物复制为 `submission/episode.hdf5 + episode.mp4`，并用 Runner 镜像验证
+  HDF5 根组只有 `metadata/data` 且 `/data` 只有 `demo_0`。
+- Runner 失败即使生成诊断视频也返回非零；批处理继续执行，但占位视频和无效文件对
+  永不计入导航成功。
+
+### 正式 Runner 测试结果
+
+- Q04：2 Hz、官方 400 动作/240 秒；一次目标，302 次 Policy 请求，最小距离
+  0.102 m（阈值 0.60 m），Nav2 SUCCEEDED，Runner 协议 VALID，文件对有效。
+- Q05：1 Hz、官方 400 动作/240 秒；一次目标，239 次请求，最小距离 8.289 m，导航失败；
+  Runner 协议和文件对仍有效，因此保留了真实失败视频。轨迹长期使用约
+  `vx=-0.12 m/s` 倒行，证明只降低频率不能解决反向长路线。
+- Q14：5 Hz、官方 500 动作；导航最小距离 0.070 m（阈值 0.25 m），文件对有效。
+- Q19：5 Hz、官方 600 动作；导航最小距离 0.118 m（阈值 0.25 m），文件对有效。
+- 四次正式测试均在第一次 stack preflight 通过、目标只提交一次，未再出现旧批次中的
+  lifecycle transition race 或数百次 goal rejection。
+- 当前版本不建议直接作为目标 30 分的最终提交：短路线和正向路线可靠，但 Q05 已证明
+  长距离反向路线存在系统性速度不足。详细数据与 SHA-256 见 `TEST_REPORT_20260830.md`。

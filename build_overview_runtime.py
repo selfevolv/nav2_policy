@@ -179,10 +179,10 @@ class BaseVisualFollower:
             print(
                 "NAV2_CHASE_CAMERA=" + json.dumps(
                     {
-                        "back_distance_m": 4.5,
-                        "height_m": 2.2,
-                        "look_ahead_m": 1.2,
-                        "target_height_m": 0.45,
+                        "back_distance_m": 4.0,
+                        "height_m": 1.6,
+                        "target_longitudinal_offset_m": -0.3,
+                        "target_height_m": 0.35,
                         "projection": "perspective",
                     },
                     sort_keys=True,
@@ -255,10 +255,10 @@ class BaseVisualFollower:
             if CHASE_OUTPUT is not None:
                 # A simple third-person racing-game camera: retain the robot's
                 # rear-follow yaw while increasing distance and visible road.
-                chase_eye = base_position - 4.5 * forward
-                chase_eye[2] += 2.2
+                chase_eye = base_position - 4.0 * forward
+                chase_eye[2] += 1.6
                 chase_target = base_position + np.asarray(
-                    [1.2 * forward[0], 1.2 * forward[1], 0.45]
+                    [-0.3 * forward[0], -0.3 * forward[1], 0.35]
                 )
                 self.cameras[self.chase_camera_index].set_world_pose(
                     position=chase_eye,

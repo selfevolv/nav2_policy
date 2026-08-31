@@ -180,7 +180,8 @@ class TaskConfigTests(unittest.TestCase):
             self.assertIn(".overview.partial.mp4", patched)
             self.assertIn("NAV2_CHASE_OUTPUT", patched)
             self.assertIn('camera_specs.append(("chase", (1280, 720)))', patched)
-            self.assertIn("chase_eye = base_position - 4.5 * forward", patched)
+            self.assertIn("chase_eye = base_position - 4.0 * forward", patched)
+            self.assertIn("-0.3 * forward[0]", patched)
             self.assertIn(".chase.partial.mp4", patched)
 
     def test_single_runner_creates_new_transaction_root(self) -> None:

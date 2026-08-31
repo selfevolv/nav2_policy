@@ -110,6 +110,22 @@ class TaskConfigTests(unittest.TestCase):
         self.assertIn('RESULT_ROOT/$TASK_ID', batch_runner)
         self.assertNotIn('results/$TASK_ID/$RUN_ID', single_runner)
 
+    def test_batch_log_records_task_duration_and_rolling_eta(self) -> None:
+        project = Path(__file__).resolve().parents[1]
+        batch_runner = (project / "scripts/run_all_tasks.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("TASK_TIMING_START", batch_runner)
+        self.assertIn("TASK_TIMING_END", batch_runner)
+        self.assertIn("ELAPSED_S=", batch_runner)
+        self.assertIn("ETA_REMAINING_S=", batch_runner)
+        self.assertIn("ETA_COMPLETION=", batch_runner)
+        self.assertIn("INITIAL_TASK_ESTIMATE_SECONDS", batch_runner)
+        self.assertIn("eta_completion_time", batch_runner)
+        self.assertIn("trap cleanup EXIT", batch_runner)
+        self.assertIn("handle_signal TERM 143", batch_runner)
+        self.assertNotIn("trap cleanup EXIT INT TERM", batch_runner)
+
     def test_runner_wall_timeout_has_exact_container_cleanup(self) -> None:
         project = Path(__file__).resolve().parents[1]
         runner = (project / "scripts/run_runner_task.sh").read_text(

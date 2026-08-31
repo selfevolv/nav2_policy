@@ -220,6 +220,12 @@ ps -p "$(cat logs/batches/results_<timestamp>.pid)"
 tail -f logs/batches/results_<timestamp>.log
 ```
 
+批次日志会在启动时输出 `BATCH_TIMING_START`，每题分别输出 `TASK_TIMING_START` 和
+`TASK_TIMING_END`。结束记录包含该题墙钟推理时间 `ELAPSED_S/ELAPSED_HMS`，并根据本批次
+已完成任务的平均耗时滚动计算 `ETA_REMAINING_HMS` 和 `ETA_COMPLETION`。第一题完成前默认
+按每题 1800 秒估算，可通过 `INITIAL_TASK_ESTIMATE_SECONDS` 调整。相同数据也会写入
+`runs.tsv`，方便程序读取。
+
 结果按“一次执行一个事务目录”组织，不再按任务长期累加不同 run-id：
 
 ```text

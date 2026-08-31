@@ -108,6 +108,17 @@ class TaskConfigTests(unittest.TestCase):
         self.assertIn('RESULT_ROOT/$TASK_ID', batch_runner)
         self.assertNotIn('results/$TASK_ID/$RUN_ID', single_runner)
 
+    def test_runner_wall_timeout_has_exact_container_cleanup(self) -> None:
+        project = Path(__file__).resolve().parents[1]
+        runner = (project / "scripts/run_runner_task.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('RUNNER_TIMEOUT_GRACE_SECONDS="${RUNNER_TIMEOUT_GRACE_SECONDS:-600}"', runner)
+        self.assertIn('--kill-after="${RUNNER_TIMEOUT_KILL_AFTER_SECONDS}s"', runner)
+        self.assertIn('--cidfile "$CID_FILE"', runner)
+        self.assertIn('docker stop --time 30 "$RUNNER_CID"', runner)
+        self.assertIn('"runner_timed_out": $RUNNER_TIMED_OUT', runner)
+
     def test_single_runner_creates_new_transaction_root(self) -> None:
         source_project = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as temporary:

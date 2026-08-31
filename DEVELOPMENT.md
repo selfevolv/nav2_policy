@@ -253,3 +253,16 @@
   目录；根目录已存在或同一任务目录已存在时直接失败，避免新旧数据混合。
 - 旧 `results/Qxx/<run-id>/` 不迁移、不删除，只保留为历史证据。官方提交单元仍是每题
   目录内同次 Runner 生成的 `submission/episode.hdf5 + episode.mp4`。
+
+## 2026-08-31：Runner 墙钟超时
+
+- 完整 Q01–Q24 批次在 Q16 导航成功后卡住：最后观测为 330、最后视频帧为 354，
+  Isaac/Carb 工作线程持续占用 CPU，但 13 小时未生成最终 MP4/HDF5，Q17–Q24 未启动。
+- 官方 `maximum_duration_s` 是仿真内部限制，Isaac 关闭或交付阶段挂起时不能保证 Docker
+  退出；原执行器没有外层墙钟 watchdog，因此批次会无限等待。
+- `run_runner_task.sh` 现用 GNU `timeout` 包裹 Runner Docker，默认墙钟上限为官方时长
+  加 600 秒冷启动/收尾余量，超时后 TERM 并在 60 秒后 KILL。
+- Docker 使用 `--cidfile`；若客户端超时后容器仍存在，执行器会按精确容器 ID 执行
+  stop/kill/rm，不使用名称或宽泛进程匹配。
+- 超时写入 `runner_timed_out`、`runner_wall_timeout_s` 和清理日志；随后按失败任务生成
+  诊断视频并返回非零，批处理可以继续下一题。

@@ -181,6 +181,8 @@ Runner 参数由单题执行器和 `config/tasks/Qxx.json` 共同确定：
 - 5 Hz 观测与录像；Q01/Q09–Q24 使用 5 Hz 动作，Q02/Q03/Q04/Q06/Q08
   使用 2 Hz，Q05/Q07 使用 1 Hz；
 - 严格使用公开任务的 `maximum_vla_actions` 和 `maximum_duration_s`，不扩展上限；
+- Docker 外层墙钟超时默认为“官方 `maximum_duration_s` + 600 秒”，超时后先 TERM、
+  60 秒后 KILL，并清理残留容器，防止单题挂死整个批次；
 - 动作 3–9 维始终为零；
 - 底盘速度限制为 `vx [-0.25,0.25]`、`vy [-0.12,0.12]`、
   `yaw_rate [-0.30,0.30]`。
@@ -247,6 +249,14 @@ results_<YYYYMMDD_HHMMSS_NNNNNNNNN>/
 随后要求 8 个 lifecycle 节点全部 ACTIVE 且 `NavigateThroughPoses` Action Server 可用。
 预检绝不发送目标；每次尝试使用新 ROS Domain，失败时最多整栈重启三次。只有收到
 第一帧真实 Runner 观测后才允许提交目标，目标失败最多再尝试两次。
+
+墙钟超时可在诊断时覆盖，但正式运行不建议缩短默认启动/收尾余量：
+
+```bash
+RUNNER_TIMEOUT_GRACE_SECONDS=600 scripts/run_all_tasks.sh Q16 Q17
+```
+
+超时任务会设置 `runner_timed_out=1`、返回非零并保留诊断视频，批处理随后继续下一题。
 
 汇总器分别报告文件对有效性与导航成功，不把 `runner_status=0`、占位视频或固定
 `0.5 m` 当作成功。导航-only 题读取正式 `robot_near_target` 条件，其他题使用公开

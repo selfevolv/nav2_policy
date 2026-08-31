@@ -27,6 +27,17 @@ fi
 IFS=$'\t' read -r TASK_CONFIG NAV2_PARAMS ACTION_HZ TASK_CONFIG_SHA NAV2_PARAMS_SHA NAVIGATION_LOCKED \
   <<<"$TASK_CONFIG_VALUES"
 DURATION="${RUNNER_MAX_DURATION_SECONDS:-$DEFAULT_DURATION}"
+RUNNER_TIMEOUT_GRACE_SECONDS="${RUNNER_TIMEOUT_GRACE_SECONDS:-600}"
+RUNNER_WALL_TIMEOUT_SECONDS="${RUNNER_WALL_TIMEOUT_SECONDS:-$((DURATION + RUNNER_TIMEOUT_GRACE_SECONDS))}"
+RUNNER_TIMEOUT_KILL_AFTER_SECONDS="${RUNNER_TIMEOUT_KILL_AFTER_SECONDS:-60}"
+for TIMEOUT_VALUE in \
+    "$RUNNER_WALL_TIMEOUT_SECONDS" \
+    "$RUNNER_TIMEOUT_KILL_AFTER_SECONDS"; do
+  if [[ ! "$TIMEOUT_VALUE" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Runner timeout values must be positive integers" >&2
+    exit 3
+  fi
+done
 
 if [[ -z "${RESULT_ROOT:-}" ]]; then
   RESULT_ROOT="$PROJECT_DIR/results_$RUN_TIMESTAMP"
@@ -57,7 +68,14 @@ if [[ -s "$PROJECT_DIR/logs/$TASK_ID/run_token" ]]; then
 fi
 
 START_UNIX=$(date +%s)
-docker run --rm \
+CID_FILE="$RESULT_DIR/runner.cid"
+RUNNER_TIMED_OUT=0
+timeout \
+  --signal=TERM \
+  --kill-after="${RUNNER_TIMEOUT_KILL_AFTER_SECONDS}s" \
+  "${RUNNER_WALL_TIMEOUT_SECONDS}s" \
+  docker run --rm \
+  --cidfile "$CID_FILE" \
   --device nvidia.com/gpu=0 \
   --network host \
   --ipc=host \
@@ -86,6 +104,25 @@ docker run --rm \
   --maximum-duration-seconds "$DURATION" \
   2>&1 | tee "$RESULT_DIR/runner.log"
 RUNNER_STATUS=${PIPESTATUS[0]}
+if [[ "$RUNNER_STATUS" -eq 124 ]]; then
+  RUNNER_TIMED_OUT=1
+  echo "RUNNER_WALL_TIMEOUT=$RUNNER_WALL_TIMEOUT_SECONDS" \
+    | tee -a "$RESULT_DIR/runner.log" >&2
+  if [[ -s "$CID_FILE" ]]; then
+    RUNNER_CID=$(tr -d '[:space:]' <"$CID_FILE")
+    if [[ "$RUNNER_CID" =~ ^[0-9a-f]{12,64}$ ]] \
+        && docker inspect "$RUNNER_CID" >/dev/null 2>&1; then
+      docker stop --time 30 "$RUNNER_CID" \
+        >"$RESULT_DIR/runner_timeout_cleanup.log" 2>&1 \
+        || docker kill "$RUNNER_CID" \
+          >>"$RESULT_DIR/runner_timeout_cleanup.log" 2>&1 \
+        || true
+      docker rm -f "$RUNNER_CID" \
+        >>"$RESULT_DIR/runner_timeout_cleanup.log" 2>&1 \
+        || true
+    fi
+  fi
+fi
 END_UNIX=$(date +%s)
 
 SOURCE_DIR="$OUTPUT_ROOT/$RUN_ID"
@@ -151,6 +188,8 @@ cat >"$RESULT_DIR/run_summary.json" <<EOF
   "attack_mode": "off",
   "navigation_mode": "vla",
   "runner_status": $RUNNER_STATUS,
+  "runner_timed_out": $RUNNER_TIMED_OUT,
+  "runner_wall_timeout_s": $RUNNER_WALL_TIMEOUT_SECONDS,
   "video_saved": $VIDEO_SAVED,
   "video_kind": "$VIDEO_KIND",
   "submission_ready": $SUBMISSION_READY,
@@ -170,6 +209,8 @@ EOF
 echo "TASK=$TASK_ID"
 echo "RUN_ID=$RUN_ID"
 echo "RUNNER_STATUS=$RUNNER_STATUS"
+echo "RUNNER_TIMED_OUT=$RUNNER_TIMED_OUT"
+echo "RUNNER_WALL_TIMEOUT_S=$RUNNER_WALL_TIMEOUT_SECONDS"
 echo "VIDEO_SAVED=$VIDEO_SAVED"
 echo "SUBMISSION_READY=$SUBMISSION_READY"
 echo "RESULT_ROOT=$RESULT_ROOT"

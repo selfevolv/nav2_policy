@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a diagnostic Runner runtime copy with one independent overview video."""
+"""Build a Runner runtime copy with independent overview and chase videos."""
 
 from __future__ import annotations
 
@@ -35,6 +35,18 @@ if OVERVIEW_OUTPUT is not None:
     if OVERVIEW_OUTPUT.exists():
         raise FileExistsError(f"refusing to overwrite overview video {OVERVIEW_OUTPUT}")
     OVERVIEW_OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+CHASE_OUTPUT_TEXT = os.environ.get("NAV2_CHASE_OUTPUT", "").strip()
+CHASE_OUTPUT = (
+    Path(CHASE_OUTPUT_TEXT).expanduser().resolve()
+    if CHASE_OUTPUT_TEXT
+    else None
+)
+if CHASE_OUTPUT is not None:
+    if CHASE_OUTPUT.name != "chase.mp4":
+        raise ValueError("NAV2_CHASE_OUTPUT must end with chase.mp4")
+    if CHASE_OUTPUT.exists():
+        raise FileExistsError(f"refusing to overwrite chase video {CHASE_OUTPUT}")
+    CHASE_OUTPUT.parent.mkdir(parents=True, exist_ok=True)
 args.portable_root = args.portable_root.expanduser().resolve()
 """,
     ),
@@ -121,6 +133,8 @@ class BaseVisualFollower:
             camera_specs.append(("follow", follow_resolution))
             if OVERVIEW_OUTPUT is not None:
                 camera_specs.append(("overview", (1280, 720)))
+            if CHASE_OUTPUT is not None:
+                camera_specs.append(("chase", (1280, 720)))
         for name, resolution in camera_specs:
 """,
     ),
@@ -129,9 +143,11 @@ class BaseVisualFollower:
         self.articulation = articulation
 """,
         """        self.cameras = cameras
+        self.overview_camera_index = None
         self.overview_camera_eye = None
         self.overview_camera_target = None
         if OVERVIEW_OUTPUT is not None:
+            self.overview_camera_index = 4
             stage = omni.usd.get_context().get_stage()
             (
                 self.overview_camera_eye,
@@ -147,15 +163,31 @@ class BaseVisualFollower:
             if not overview_schema or not overview_schema.GetPrim().IsValid():
                 raise RuntimeError("overview camera USD Prim is invalid")
             overview_schema.GetProjectionAttr().Set(UsdGeom.Tokens.orthographic)
-            self.cameras[4].set_horizontal_aperture(
+            self.cameras[self.overview_camera_index].set_horizontal_aperture(
                 float(overview_camera_report["horizontal_aperture_m"])
             )
-            self.cameras[4].set_clipping_range(
+            self.cameras[self.overview_camera_index].set_clipping_range(
                 near_distance=0.05,
                 far_distance=max(
                     100.0,
                     float(self.overview_camera_eye[2] - self.overview_camera_target[2] + 10.0),
                 ),
+            )
+        self.chase_camera_index = None
+        if CHASE_OUTPUT is not None:
+            self.chase_camera_index = 4 + int(OVERVIEW_OUTPUT is not None)
+            print(
+                "NAV2_CHASE_CAMERA=" + json.dumps(
+                    {
+                        "back_distance_m": 4.5,
+                        "height_m": 2.2,
+                        "look_ahead_m": 1.2,
+                        "target_height_m": 0.45,
+                        "projection": "perspective",
+                    },
+                    sort_keys=True,
+                ),
+                flush=True,
             )
         self.articulation = articulation
 """,
@@ -168,6 +200,7 @@ class BaseVisualFollower:
         """        self.video_frame_count = 0
         self.video_frames = args.output / ".video_frames"
         self.overview_frames = args.output / ".overview_frames"
+        self.chase_frames = args.output / ".chase_frames"
         self._direct_command_override: np.ndarray | None = None
 """,
     ),
@@ -189,6 +222,12 @@ class BaseVisualFollower:
                         f"refusing to reuse overview frame directory {self.overview_frames}"
                     )
                 self.overview_frames.mkdir(parents=True)
+            if CHASE_OUTPUT is not None:
+                if self.chase_frames.exists():
+                    raise FileExistsError(
+                        f"refusing to reuse chase frame directory {self.chase_frames}"
+                    )
+                self.chase_frames.mkdir(parents=True)
 
     def link_transform(self, body_index: int) -> tuple[np.ndarray, np.ndarray]:
 """,
@@ -206,12 +245,24 @@ class BaseVisualFollower:
                 orientation=look_at(recording_eye, recording_target),
             )
             if OVERVIEW_OUTPUT is not None:
-                self.cameras[4].set_world_pose(
+                self.cameras[self.overview_camera_index].set_world_pose(
                     position=self.overview_camera_eye,
                     orientation=look_at(
                         self.overview_camera_eye,
                         self.overview_camera_target,
                     ),
+                )
+            if CHASE_OUTPUT is not None:
+                # A simple third-person racing-game camera: retain the robot's
+                # rear-follow yaw while increasing distance and visible road.
+                chase_eye = base_position - 4.5 * forward
+                chase_eye[2] += 2.2
+                chase_target = base_position + np.asarray(
+                    [1.2 * forward[0], 1.2 * forward[1], 0.45]
+                )
+                self.cameras[self.chase_camera_index].set_world_pose(
+                    position=chase_eye,
+                    orientation=look_at(chase_eye, chase_target),
                 )
 
     @staticmethod
@@ -231,9 +282,19 @@ class BaseVisualFollower:
                 quality=90,
             )
             if OVERVIEW_OUTPUT is not None:
-                overview_frame = Image.fromarray(self.recording_rgb(self.cameras[4]))
+                overview_frame = Image.fromarray(
+                    self.recording_rgb(self.cameras[self.overview_camera_index])
+                )
                 overview_frame.save(
                     self.overview_frames / f"frame_{self.video_frame_count:06d}.jpg",
+                    quality=90,
+                )
+            if CHASE_OUTPUT is not None:
+                chase_frame = Image.fromarray(
+                    self.recording_rgb(self.cameras[self.chase_camera_index])
+                )
+                chase_frame.save(
+                    self.chase_frames / f"frame_{self.video_frame_count:06d}.jpg",
                     quality=90,
                 )
             self.video_frame_count += 1
@@ -277,6 +338,37 @@ class BaseVisualFollower:
             subprocess.run(overview_command, check=True, timeout=300)
             temporary_overview.replace(OVERVIEW_OUTPUT)
             shutil.rmtree(self.overview_frames)
+        if CHASE_OUTPUT is not None:
+            temporary_chase = CHASE_OUTPUT.with_name(".chase.partial.mp4")
+            if temporary_chase.exists():
+                raise FileExistsError(
+                    f"refusing to overwrite partial chase video {temporary_chase}"
+                )
+            chase_command = [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-framerate",
+                str(args.video_fps),
+                "-i",
+                str(self.chase_frames / "frame_%06d.jpg"),
+                "-c:v",
+                "libx264",
+                "-preset",
+                "medium",
+                "-crf",
+                "20",
+                "-pix_fmt",
+                "yuv420p",
+                "-movflags",
+                "+faststart",
+                str(temporary_chase),
+            ]
+            subprocess.run(chase_command, check=True, timeout=300)
+            temporary_chase.replace(CHASE_OUTPUT)
+            shutil.rmtree(self.chase_frames)
         report = {
 """,
     ),

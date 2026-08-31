@@ -73,10 +73,15 @@ if [[ "$RUNNER_OVERVIEW" != "0" && "$RUNNER_OVERVIEW" != "1" ]]; then
   echo "RUNNER_OVERVIEW must be 0 or 1" >&2
   exit 3
 fi
+RUNNER_CHASE="${RUNNER_CHASE:-0}"
+if [[ "$RUNNER_CHASE" != "0" && "$RUNNER_CHASE" != "1" ]]; then
+  echo "RUNNER_CHASE must be 0 or 1" >&2
+  exit 3
+fi
 DOCKER_OVERVIEW_ARGS=()
 OVERVIEW_SPOOL_DIR=""
-if [[ "$RUNNER_OVERVIEW" == "1" ]]; then
-  OVERVIEW_RUNTIME="$CACHE_ROOT/overview_runtime/m20_fourview_runner.py"
+if [[ "$RUNNER_OVERVIEW" == "1" || "$RUNNER_CHASE" == "1" ]]; then
+  OVERVIEW_RUNTIME="${OVERVIEW_RUNTIME_PATH:-$CACHE_ROOT/overview_runtime/m20_fourview_runner.py}"
   OVERVIEW_SPOOL_ROOT="$CACHE_ROOT/overview_spool"
   OVERVIEW_SPOOL_DIR="$OVERVIEW_SPOOL_ROOT/$RUN_ID"
   if [[ ! -s "$OVERVIEW_RUNTIME" ]]; then
@@ -89,10 +94,19 @@ if [[ "$RUNNER_OVERVIEW" == "1" ]]; then
     exit 2
   fi
   DOCKER_OVERVIEW_ARGS=(
-    -e "NAV2_OVERVIEW_OUTPUT=/opt/safety_embodiment/overview/$RUN_ID/overview.mp4"
     -v "$OVERVIEW_RUNTIME:/opt/safety_embodiment/competition_runner/runner/m20_runtime/runners/m20_fourview_runner.py:ro"
     -v "$OVERVIEW_SPOOL_ROOT:/opt/safety_embodiment/overview"
   )
+  if [[ "$RUNNER_OVERVIEW" == "1" ]]; then
+    DOCKER_OVERVIEW_ARGS+=(
+      -e "NAV2_OVERVIEW_OUTPUT=/opt/safety_embodiment/overview/$RUN_ID/overview.mp4"
+    )
+  fi
+  if [[ "$RUNNER_CHASE" == "1" ]]; then
+    DOCKER_OVERVIEW_ARGS+=(
+      -e "NAV2_CHASE_OUTPUT=/opt/safety_embodiment/overview/$RUN_ID/chase.mp4"
+    )
+  fi
 fi
 
 START_UNIX=$(date +%s)
@@ -170,6 +184,8 @@ VIDEO_KIND="missing"
 SUBMISSION_READY=0
 OVERVIEW_SAVED=0
 OVERVIEW_KIND="disabled"
+CHASE_SAVED=0
+CHASE_KIND="disabled"
 if [[ -s "$VIDEO_SOURCE" ]]; then
   cp "$VIDEO_SOURCE" "$RESULT_DIR/episode.mp4"
   VIDEO_SAVED=1
@@ -196,6 +212,29 @@ if [[ "$RUNNER_OVERVIEW" == "1" ]]; then
     fi
   fi
   rm -f "$OVERVIEW_SOURCE"
+fi
+if [[ "$RUNNER_CHASE" == "1" ]]; then
+  CHASE_SOURCE="$OVERVIEW_SPOOL_DIR/chase.mp4"
+  CHASE_KIND="missing"
+  if [[ -s "$CHASE_SOURCE" ]]; then
+    cp "$CHASE_SOURCE" "$RESULT_DIR/chase.mp4"
+    CHASE_SAVED=1
+    CHASE_KIND="isaac_third_person_chase"
+  elif command -v ffmpeg >/dev/null 2>&1; then
+    ffmpeg -v error -y \
+      -f lavfi -i "color=c=0x202020:s=1280x720:r=5" \
+      -t 5 -c:v libx264 -pix_fmt yuv420p \
+      -metadata title="$TASK_ID chase view unavailable" \
+      -metadata comment="No Isaac chase frames were produced; inspect runner.log" \
+      "$RESULT_DIR/chase.mp4"
+    if [[ -s "$RESULT_DIR/chase.mp4" ]]; then
+      CHASE_SAVED=1
+      CHASE_KIND="diagnostic_placeholder"
+    fi
+  fi
+  rm -f "$CHASE_SOURCE"
+fi
+if [[ "$RUNNER_OVERVIEW" == "1" || "$RUNNER_CHASE" == "1" ]]; then
   rmdir "$OVERVIEW_SPOOL_DIR" 2>/dev/null || true
 fi
 if [[ -s "$HDF5_SOURCE" && "$VIDEO_KIND" == "runner_episode" ]]; then
@@ -268,6 +307,8 @@ echo "RUNNER_WALL_TIMEOUT_S=$RUNNER_WALL_TIMEOUT_SECONDS"
 echo "VIDEO_SAVED=$VIDEO_SAVED"
 echo "OVERVIEW_SAVED=$OVERVIEW_SAVED"
 echo "OVERVIEW_KIND=$OVERVIEW_KIND"
+echo "CHASE_SAVED=$CHASE_SAVED"
+echo "CHASE_KIND=$CHASE_KIND"
 echo "SUBMISSION_READY=$SUBMISSION_READY"
 echo "RESULT_ROOT=$RESULT_ROOT"
 echo "RESULT_DIR=$RESULT_DIR"
@@ -279,6 +320,9 @@ if [[ "$VIDEO_SAVED" -ne 1 ]]; then
 fi
 if [[ "$RUNNER_OVERVIEW" == "1" && "$OVERVIEW_SAVED" -ne 1 ]]; then
   exit 22
+fi
+if [[ "$RUNNER_CHASE" == "1" && "$CHASE_SAVED" -ne 1 ]]; then
+  exit 23
 fi
 if [[ "$RUNNER_STATUS" -ne 0 ]]; then
   exit "$RUNNER_STATUS"

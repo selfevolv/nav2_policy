@@ -4,8 +4,6 @@ set -euo pipefail
 PROJECT_DIR="${PROJECT_DIR:-/mnt/data/samba/tianchi/2026-具身安全应用挑战赛/runner-runtime/policy/nav2_policy}"
 RUNNER_IMAGE="${RUNNER_IMAGE:-safety-embodiment:20260817}"
 CACHE_ROOT="$PROJECT_DIR/cache"
-RUNTIME_DIR="$CACHE_ROOT/overview_runtime"
-RUNTIME_PATH="$RUNTIME_DIR/m20_fourview_runner.py"
 INTERNAL_RUNTIME="/opt/safety_embodiment/competition_runner/runner/m20_runtime/runners/m20_fourview_runner.py"
 
 mkdir -p "$CACHE_ROOT"
@@ -32,6 +30,9 @@ python3 "$PROJECT_DIR/build_overview_runtime.py" \
   --source "$SOURCE_PATH" \
   --output "$BUILT_PATH"
 
+RUNTIME_SHA=$(sha256sum "$BUILT_PATH" | awk '{print $1}')
+RUNTIME_DIR="$CACHE_ROOT/overview_runtime/$RUNTIME_SHA"
+RUNTIME_PATH="$RUNTIME_DIR/m20_fourview_runner.py"
 mkdir -p "$RUNTIME_DIR"
 if [[ -e "$RUNTIME_PATH" ]]; then
   if ! cmp -s "$BUILT_PATH" "$RUNTIME_PATH"; then

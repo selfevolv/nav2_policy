@@ -232,6 +232,7 @@ results_<YYYYMMDD_HHMMSS_NNNNNNNNN>/
 │   ├── nav2_params.yaml
 │   ├── episode.mp4
 │   ├── overview.mp4              # 仅调试批次存在，不进入提交目录
+│   ├── chase.mp4                 # 远距第三人称追随视角，也不进入提交目录
 │   ├── logs/status files…
 │   └── submission/
 │       ├── episode.hdf5
@@ -247,7 +248,7 @@ results_<YYYYMMDD_HHMMSS_NNNNNNNNN>/
 `video_kind=runner_episode` 表示官方仿真录像；只有 Runner 在录像器启动前失败时才生成
 明确标记的 `diagnostic_placeholder`，后者不会计为导航成功。
 
-### 独立全局俯视调试视频
+### 独立全局俯视与第三人称调试视频
 
 需要在保持原产物不变的同时观察全场动态时，使用独立入口：
 
@@ -259,16 +260,19 @@ scripts/run_all_tasks_overview.sh
 
 该入口先从固定镜像 `safety-embodiment:20260817` 提取
 `m20_fourview_runner.py`，核验官方源文件 SHA-256，再在 `cache/overview_runtime/`
-生成副本。官方镜像和镜像内文件不会被修改。副本保留原跟随相机，额外创建第五台相机：
-它根据任务实际加载的 Isaac USD 场景边界计算画幅，位于屋顶下方、场景中心正上方，
-采用正交投影向下拍摄。
+按生成文件 SHA-256 存入不可变子目录。官方镜像和镜像内文件不会被修改；每个批次在
+启动时固定自己使用的副本路径，后续构建不会改变正在运行的批次。副本保留原跟随相机，
+额外创建第五、六台相机：第五台根据任务实际加载的 Isaac USD 场景边界计算画幅，位于
+屋顶下方、场景中心正上方，采用正交投影向下拍摄；第六台随机械狗朝向移动，位于后方
+4.5 米、上方 2.2 米并看向前方 1.2 米处，形成远距第三人称赛车式视角。
 
-`overview.mp4` 通过独立侧车目录传出，只复制到 `results_<timestamp>/Qxx/`；它永远不会
-复制到 `submission/`。原有 `episode.mp4`、`episode.hdf5`、任务配置、Nav2 参数、日志和
-汇总流程保持不变。调试批次使用 `cache/overview_logs/<timestamp>/`，不会覆盖普通运行的
-`logs/Qxx/`。若 Isaac 在首帧前失败，仍生成明确标记的 `overview.mp4` 占位视频。第五台
-1280×720 相机会降低仿真实时速度，因此该入口默认使用“官方时长 + 1200 秒”的有限墙钟
-超时；普通运行仍为“官方时长 + 600 秒”。
+`overview.mp4` 与 `chase.mp4` 通过独立侧车目录传出，只复制到
+`results_<timestamp>/Qxx/`；两者永远不会复制到 `submission/`。原有 `episode.mp4`、
+`episode.hdf5`、任务配置、Nav2 参数、日志和汇总流程保持不变。调试批次使用
+`cache/overview_logs/<timestamp>/`，不会覆盖普通运行的 `logs/Qxx/`。若 Isaac 在首帧前
+失败，两个调试视角仍会分别生成明确标记的占位视频。两台额外的 1280×720 相机会降低
+仿真实时速度，因此该入口默认使用“官方时长 + 1800 秒”的有限墙钟超时；普通运行仍为
+“官方时长 + 600 秒”。
 
 批量执行会在启动 Isaac Sim 前做 Nav2 健康检查：Policy bridge 先发布公开出生点 TF，
 随后要求 8 个 lifecycle 节点全部 ACTIVE 且 `NavigateThroughPoses` Action Server 可用。

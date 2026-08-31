@@ -3,7 +3,8 @@ set -eo pipefail
 
 TASK_ID="${1:?usage: stop_task_stack.sh Qxx}"
 PROJECT_DIR="${PROJECT_DIR:-/mnt/data/samba/tianchi/2026-具身安全应用挑战赛/runner-runtime/policy/nav2_policy}"
-RUN_DIR="$PROJECT_DIR/logs/$TASK_ID"
+RUN_LOG_ROOT="${RUN_LOG_ROOT:-$PROJECT_DIR/logs}"
+RUN_DIR="$RUN_LOG_ROOT/$TASK_ID"
 
 for NAME in policy nav2; do
   PID_FILE="$RUN_DIR/$NAME.pid"

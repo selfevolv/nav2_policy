@@ -49,6 +49,7 @@ ROS 运行时还必须提供以下包或等价源码覆盖层：
 - `ffmpeg`、`ffprobe`：视频验证，以及 Runner 在录像器启动前失败时生成明确标记的
   诊断占位视频；
 - Bash、`setsid`、`nohup`、`ss`：进程隔离、后台批次和端口健康检查；
+- GNU coreutils/diffutils：`sha256sum`、`mktemp`、`cmp`，用于校验并生成俯视 runtime 副本；
 - Git：版本管理。
 
 ## Python 包安装

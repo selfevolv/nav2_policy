@@ -266,3 +266,24 @@
   stop/kill/rm，不使用名称或宽泛进程匹配。
 - 超时写入 `runner_timed_out`、`runner_wall_timeout_s` 和清理日志；随后按失败任务生成
   诊断视频并返回非零，批处理可以继续下一题。
+
+## 2026-08-31：独立 Isaac 全局俯视调试录像
+
+- 官方 Runner 只原子发布 `episode.mp4 + submission.hdf5`，额外写入内部 workdir 的文件
+  不会发布；因此俯视视频使用独立只写侧车挂载，不改变官方发布目录。
+- `build_overview_runtime.py` 仅接受 SHA-256 为
+  `6f1e3327c378e9c69785fbbf35147ee1012a382b31d4e13fe49f8c82913006b3` 的官方
+  `m20_fourview_runner.py`，并生成缓存副本。官方镜像 ID 保持
+  `sha256:4edf7b5faed0799ee81e286e1bf358cc46ba5080779bdca16b783b2b0668a578`。
+- 副本保留原三台 Policy 相机和第四台跟随录像相机，只在启用
+  `NAV2_OVERVIEW_OUTPUT` 时增加第五台 1280×720 相机。正交画幅从已加载 USD 默认 Prim
+  的 render bounds 计算，相机位于屋顶下方并垂直朝向场景地面。
+- 第一版外部透视相机虽然覆盖完整场景，但只能看到仓库屋顶，已作为失败校准运行保留；
+  第二版改为屋顶下方正交投影，Q01 预览确认可以看到完整仓库内部。
+- `RUN_LOG_ROOT` 新增向后兼容覆盖项；普通运行仍写 `logs/`，俯视调试运行写
+  `cache/overview_logs/<timestamp>/`，避免覆盖既有日志。
+- 结果目录只增加同级 `overview.mp4`；执行器没有向 `submission/` 复制该文件，也没有
+  改动 `run_summary.json` 的既有字段。
+- Q01 第二版完整运行产生 954 帧同步跟随/俯视录像，Runner 状态 0、提交文件对验证通过、
+  导航最小距离 0.022 m。由于第五台 1280×720 相机会降低仿真实时速度，俯视入口单独把
+  墙钟余量设为 1200 秒；普通入口仍保持 600 秒。

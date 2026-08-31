@@ -3,6 +3,7 @@ set -uo pipefail
 
 PROJECT_DIR="${PROJECT_DIR:-/mnt/data/samba/tianchi/2026-具身安全应用挑战赛/runner-runtime/policy/nav2_policy}"
 SCRIPT_DIR="$PROJECT_DIR/scripts"
+RUN_LOG_ROOT="${RUN_LOG_ROOT:-$PROJECT_DIR/logs}"
 RUN_TIMESTAMP="${RUN_TIMESTAMP:-$(date +%Y%m%d_%H%M%S_%N)}"
 RESULT_ROOT="${RESULT_ROOT:-$PROJECT_DIR/results_$RUN_TIMESTAMP}"
 BATCH_ID="${BATCH_ID:-nav2_$RUN_TIMESTAMP}"
@@ -66,7 +67,8 @@ for TASK_ID in "${TASKS[@]}"; do
 
   ACTIVE_TASK="$TASK_ID"
   READY=0
-  PREFLIGHT_LOG="$PROJECT_DIR/logs/$TASK_ID/preflight.log"
+  PREFLIGHT_LOG="$RUN_LOG_ROOT/$TASK_ID/preflight.log"
+  mkdir -p "$RUN_LOG_ROOT/$TASK_ID"
   : >"$PREFLIGHT_LOG"
   for START_ATTEMPT in 1 2 3; do
     "$SCRIPT_DIR/stop_task_stack.sh" "$TASK_ID" || true
@@ -93,7 +95,7 @@ for TASK_ID in "${TASKS[@]}"; do
     EXECUTOR_STATUS=$?
   else
     echo "Nav2 did not accept the route after three starts for $TASK_ID" \
-      >"$PROJECT_DIR/logs/$TASK_ID/runner_startup_error.log"
+      >"$RUN_LOG_ROOT/$TASK_ID/runner_startup_error.log"
     # Still invoke the single-task executor: Runner may produce its own failure
     # episode, and otherwise the executor creates a labelled diagnostic video.
     "$SCRIPT_DIR/run_runner_task.sh" "$TASK_ID" "$RUN_ID"

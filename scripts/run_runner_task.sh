@@ -3,6 +3,7 @@ set -o pipefail
 
 TASK_ID="${1:?usage: run_runner_task.sh Qxx [run-id]}"
 PROJECT_DIR="${PROJECT_DIR:-/mnt/data/samba/tianchi/2026-具身安全应用挑战赛/runner-runtime/policy/nav2_policy}"
+RUN_LOG_ROOT="${RUN_LOG_ROOT:-$PROJECT_DIR/logs}"
 OUTPUT_ROOT="/mnt/data/samba/tianchi/2026-具身安全应用挑战赛/runner-runtime/output"
 QUESTION_ROOT="/mnt/data/samba/tianchi/2026-具身安全应用挑战赛/question_to_player"
 PLAYER_RUNTIME="/mnt/data/samba/tianchi/2026-具身安全应用挑战赛/runner-runtime/player_runtime"
@@ -63,8 +64,35 @@ mkdir -p "$CACHE_ROOT/ov" "$CACHE_ROOT/nvidia"
 cp "$TASK_CONFIG" "$RESULT_DIR/task_config.json"
 cp "$NAV2_PARAMS" "$RESULT_DIR/nav2_params.yaml"
 RUN_TOKEN="unknown"
-if [[ -s "$PROJECT_DIR/logs/$TASK_ID/run_token" ]]; then
-  RUN_TOKEN=$(<"$PROJECT_DIR/logs/$TASK_ID/run_token")
+if [[ -s "$RUN_LOG_ROOT/$TASK_ID/run_token" ]]; then
+  RUN_TOKEN=$(<"$RUN_LOG_ROOT/$TASK_ID/run_token")
+fi
+
+RUNNER_OVERVIEW="${RUNNER_OVERVIEW:-0}"
+if [[ "$RUNNER_OVERVIEW" != "0" && "$RUNNER_OVERVIEW" != "1" ]]; then
+  echo "RUNNER_OVERVIEW must be 0 or 1" >&2
+  exit 3
+fi
+DOCKER_OVERVIEW_ARGS=()
+OVERVIEW_SPOOL_DIR=""
+if [[ "$RUNNER_OVERVIEW" == "1" ]]; then
+  OVERVIEW_RUNTIME="$CACHE_ROOT/overview_runtime/m20_fourview_runner.py"
+  OVERVIEW_SPOOL_ROOT="$CACHE_ROOT/overview_spool"
+  OVERVIEW_SPOOL_DIR="$OVERVIEW_SPOOL_ROOT/$RUN_ID"
+  if [[ ! -s "$OVERVIEW_RUNTIME" ]]; then
+    echo "Overview runtime copy is missing: $OVERVIEW_RUNTIME" >&2
+    exit 3
+  fi
+  mkdir -p "$OVERVIEW_SPOOL_ROOT"
+  if ! mkdir "$OVERVIEW_SPOOL_DIR"; then
+    echo "Refusing to reuse overview spool: $OVERVIEW_SPOOL_DIR" >&2
+    exit 2
+  fi
+  DOCKER_OVERVIEW_ARGS=(
+    -e "NAV2_OVERVIEW_OUTPUT=/opt/safety_embodiment/overview/$RUN_ID/overview.mp4"
+    -v "$OVERVIEW_RUNTIME:/opt/safety_embodiment/competition_runner/runner/m20_runtime/runners/m20_fourview_runner.py:ro"
+    -v "$OVERVIEW_SPOOL_ROOT:/opt/safety_embodiment/overview"
+  )
 fi
 
 START_UNIX=$(date +%s)
@@ -89,6 +117,7 @@ timeout \
   -v "$QUESTION_ROOT:/opt/safety_embodiment/question/unified_q01_q24_20260813:ro" \
   -v "$CACHE_ROOT/ov:/root/.cache/ov" \
   -v "$CACHE_ROOT/nvidia:/root/.cache/nvidia" \
+  "${DOCKER_OVERVIEW_ARGS[@]}" \
   "$RUNNER_IMAGE" \
   --config /opt/safety_embodiment/config/ubuntu-teleop-runner.json \
   run \
@@ -139,10 +168,35 @@ HDF5_SOURCE="$SOURCE_DIR/submission.hdf5"
 VIDEO_SAVED=0
 VIDEO_KIND="missing"
 SUBMISSION_READY=0
+OVERVIEW_SAVED=0
+OVERVIEW_KIND="disabled"
 if [[ -s "$VIDEO_SOURCE" ]]; then
   cp "$VIDEO_SOURCE" "$RESULT_DIR/episode.mp4"
   VIDEO_SAVED=1
   VIDEO_KIND="runner_episode"
+fi
+
+if [[ "$RUNNER_OVERVIEW" == "1" ]]; then
+  OVERVIEW_SOURCE="$OVERVIEW_SPOOL_DIR/overview.mp4"
+  OVERVIEW_KIND="missing"
+  if [[ -s "$OVERVIEW_SOURCE" ]]; then
+    cp "$OVERVIEW_SOURCE" "$RESULT_DIR/overview.mp4"
+    OVERVIEW_SAVED=1
+    OVERVIEW_KIND="isaac_global_overhead"
+  elif command -v ffmpeg >/dev/null 2>&1; then
+    ffmpeg -v error -y \
+      -f lavfi -i "color=c=0x202020:s=1280x720:r=5" \
+      -t 5 -c:v libx264 -pix_fmt yuv420p \
+      -metadata title="$TASK_ID overview unavailable" \
+      -metadata comment="No Isaac overview frames were produced; inspect runner.log" \
+      "$RESULT_DIR/overview.mp4"
+    if [[ -s "$RESULT_DIR/overview.mp4" ]]; then
+      OVERVIEW_SAVED=1
+      OVERVIEW_KIND="diagnostic_placeholder"
+    fi
+  fi
+  rm -f "$OVERVIEW_SOURCE"
+  rmdir "$OVERVIEW_SPOOL_DIR" 2>/dev/null || true
 fi
 if [[ -s "$HDF5_SOURCE" && "$VIDEO_KIND" == "runner_episode" ]]; then
   mkdir -p "$RESULT_DIR/submission"
@@ -154,12 +208,12 @@ if [[ -s "$HDF5_SOURCE" && "$VIDEO_KIND" == "runner_episode" ]]; then
     SUBMISSION_READY=1
   fi
 fi
-if [[ -s "$PROJECT_DIR/logs/$TASK_ID/navigation_status.json" ]]; then
-  cp "$PROJECT_DIR/logs/$TASK_ID/navigation_status.json" "$RESULT_DIR/navigation_status.json"
+if [[ -s "$RUN_LOG_ROOT/$TASK_ID/navigation_status.json" ]]; then
+  cp "$RUN_LOG_ROOT/$TASK_ID/navigation_status.json" "$RESULT_DIR/navigation_status.json"
 fi
 for LOG_NAME in nav2 policy preflight; do
-  if [[ -s "$PROJECT_DIR/logs/$TASK_ID/$LOG_NAME.log" ]]; then
-    cp "$PROJECT_DIR/logs/$TASK_ID/$LOG_NAME.log" "$RESULT_DIR/$LOG_NAME.log"
+  if [[ -s "$RUN_LOG_ROOT/$TASK_ID/$LOG_NAME.log" ]]; then
+    cp "$RUN_LOG_ROOT/$TASK_ID/$LOG_NAME.log" "$RESULT_DIR/$LOG_NAME.log"
   fi
 done
 
@@ -212,6 +266,8 @@ echo "RUNNER_STATUS=$RUNNER_STATUS"
 echo "RUNNER_TIMED_OUT=$RUNNER_TIMED_OUT"
 echo "RUNNER_WALL_TIMEOUT_S=$RUNNER_WALL_TIMEOUT_SECONDS"
 echo "VIDEO_SAVED=$VIDEO_SAVED"
+echo "OVERVIEW_SAVED=$OVERVIEW_SAVED"
+echo "OVERVIEW_KIND=$OVERVIEW_KIND"
 echo "SUBMISSION_READY=$SUBMISSION_READY"
 echo "RESULT_ROOT=$RESULT_ROOT"
 echo "RESULT_DIR=$RESULT_DIR"
@@ -220,6 +276,9 @@ echo "RESULT_DIR=$RESULT_DIR"
 # diagnostic fallback is a separate artifact failure surfaced with status 20.
 if [[ "$VIDEO_SAVED" -ne 1 ]]; then
   exit 20
+fi
+if [[ "$RUNNER_OVERVIEW" == "1" && "$OVERVIEW_SAVED" -ne 1 ]]; then
+  exit 22
 fi
 if [[ "$RUNNER_STATUS" -ne 0 ]]; then
   exit "$RUNNER_STATUS"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import os
 import shutil
@@ -12,6 +13,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from compile_tasks import navigation_acceptance
+from build_overview_runtime import REPLACEMENTS, build as build_overview_runtime
 from summarize_results import main as summarize_main
 from task_config import load_task_config
 
@@ -118,6 +120,33 @@ class TaskConfigTests(unittest.TestCase):
         self.assertIn('--cidfile "$CID_FILE"', runner)
         self.assertIn('docker stop --time 30 "$RUNNER_CID"', runner)
         self.assertIn('"runner_timed_out": $RUNNER_TIMED_OUT', runner)
+
+    def test_overview_is_sidecar_only_and_never_enters_submission(self) -> None:
+        project = Path(__file__).resolve().parents[1]
+        runner = (project / "scripts/run_runner_task.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("RUNNER_OVERVIEW", runner)
+        self.assertIn("NAV2_OVERVIEW_OUTPUT", runner)
+        self.assertIn('cp "$OVERVIEW_SOURCE" "$RESULT_DIR/overview.mp4"', runner)
+        self.assertNotIn("$RESULT_DIR/submission/overview.mp4", runner)
+        self.assertIn('RUN_LOG_ROOT="${RUN_LOG_ROOT:-$PROJECT_DIR/logs}"', runner)
+
+    def test_overview_runtime_builder_requires_exact_context(self) -> None:
+        synthetic_source = "\n".join(old for old, _ in REPLACEMENTS)
+        digest = hashlib.sha256(synthetic_source.encode()).hexdigest()
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "official.py"
+            output = Path(temporary) / "overview.py"
+            source.write_text(synthetic_source, encoding="utf-8")
+            with patch(
+                "build_overview_runtime.OFFICIAL_SOURCE_SHA256", digest
+            ), patch("builtins.compile"):
+                build_overview_runtime(source, output)
+            patched = output.read_text(encoding="utf-8")
+            self.assertIn("NAV2_OVERVIEW_OUTPUT", patched)
+            self.assertIn("overview_camera_pose", patched)
+            self.assertIn(".overview.partial.mp4", patched)
 
     def test_single_runner_creates_new_transaction_root(self) -> None:
         source_project = Path(__file__).resolve().parents[1]

@@ -4,7 +4,8 @@ set -eo pipefail
 TASK_ID="${1:?usage: start_task_stack.sh Qxx}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${PROJECT_DIR:-/mnt/data/samba/tianchi/2026-具身安全应用挑战赛/runner-runtime/policy/nav2_policy}"
-RUN_DIR="$PROJECT_DIR/logs/$TASK_ID"
+RUN_LOG_ROOT="${RUN_LOG_ROOT:-$PROJECT_DIR/logs}"
+RUN_DIR="$RUN_LOG_ROOT/$TASK_ID"
 mkdir -p "$RUN_DIR"
 STATUS_FILE="$RUN_DIR/navigation_status.json"
 

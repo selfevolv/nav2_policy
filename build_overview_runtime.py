@@ -176,14 +176,29 @@ class BaseVisualFollower:
         self.chase_camera_index = None
         if CHASE_OUTPUT is not None:
             self.chase_camera_index = 4 + int(OVERVIEW_OUTPUT is not None)
+            chase_camera = self.cameras[self.chase_camera_index]
+            chase_original_focal_length = float(chase_camera.get_focal_length())
+            chase_horizontal_aperture = float(chase_camera.get_horizontal_aperture())
+            chase_focal_length = 0.5 * chase_original_focal_length
+            chase_camera.set_focal_length(chase_focal_length)
+            chase_horizontal_fov_degrees = math.degrees(
+                2.0 * math.atan(
+                    chase_horizontal_aperture / (2.0 * chase_focal_length)
+                )
+            )
             print(
                 "NAV2_CHASE_CAMERA=" + json.dumps(
                     {
-                        "back_distance_m": 4.0,
-                        "height_m": 1.6,
-                        "target_longitudinal_offset_m": -0.3,
-                        "target_height_m": 0.35,
+                        "back_distance_m": 6.0,
+                        "height_m": 1.2,
+                        "target_longitudinal_offset_m": 0.0,
+                        "target_height_m": 0.0,
                         "projection": "perspective",
+                        "original_focal_length": chase_original_focal_length,
+                        "focal_length": chase_focal_length,
+                        "focal_length_scale": 0.5,
+                        "horizontal_aperture": chase_horizontal_aperture,
+                        "horizontal_fov_degrees": chase_horizontal_fov_degrees,
                     },
                     sort_keys=True,
                 ),
@@ -255,10 +270,10 @@ class BaseVisualFollower:
             if CHASE_OUTPUT is not None:
                 # A simple third-person racing-game camera: retain the robot's
                 # rear-follow yaw while increasing distance and visible road.
-                chase_eye = base_position - 4.0 * forward
-                chase_eye[2] += 1.6
+                chase_eye = base_position - 6.0 * forward
+                chase_eye[2] += 1.2
                 chase_target = base_position + np.asarray(
-                    [-0.3 * forward[0], -0.3 * forward[1], 0.35]
+                    [0.0 * forward[0], 0.0 * forward[1], 0.0]
                 )
                 self.cameras[self.chase_camera_index].set_world_pose(
                     position=chase_eye,

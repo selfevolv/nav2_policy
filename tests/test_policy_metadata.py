@@ -180,8 +180,10 @@ class TaskConfigTests(unittest.TestCase):
             self.assertIn(".overview.partial.mp4", patched)
             self.assertIn("NAV2_CHASE_OUTPUT", patched)
             self.assertIn('camera_specs.append(("chase", (1280, 720)))', patched)
-            self.assertIn("chase_eye = base_position - 4.0 * forward", patched)
-            self.assertIn("-0.3 * forward[0]", patched)
+            self.assertIn("chase_eye = base_position - 6.0 * forward", patched)
+            self.assertIn("0.0 * forward[0]", patched)
+            self.assertIn("chase_camera.set_focal_length(chase_focal_length)", patched)
+            self.assertIn('"focal_length_scale": 0.5', patched)
             self.assertIn(".chase.partial.mp4", patched)
 
     def test_single_runner_creates_new_transaction_root(self) -> None:

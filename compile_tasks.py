@@ -10,6 +10,11 @@ import math
 from pathlib import Path
 from typing import Any
 
+from task_config import load_task_config
+
+
+ROUTE_OVERRIDE_SCHEMA = "m20-nav2-route-override/v1"
+
 
 def scene_key(scene_usd: str) -> str:
     lowered = scene_usd.lower()
@@ -121,16 +126,68 @@ def compile_one(question_dir: Path) -> dict[str, Any]:
     }
 
 
+def apply_route_override(task: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    """Apply a hash-locked task route while preserving the official final goal."""
+    override_value = config.get("route_override_file")
+    if not override_value:
+        return task
+    override_path = Path(override_value)
+    payload = json.loads(override_path.read_text(encoding="utf-8"))
+    if payload.get("schema") != ROUTE_OVERRIDE_SCHEMA:
+        raise ValueError(f"{override_path}: unsupported route override schema")
+    if payload.get("task_id") != task["question_id"]:
+        raise ValueError(f"{override_path}: task_id mismatch")
+    points_value = payload.get("waypoints_xy")
+    if not isinstance(points_value, list) or len(points_value) < 2:
+        raise ValueError(f"{override_path}: waypoints_xy must contain at least 2 poses")
+    points: list[list[float]] = []
+    for index, point in enumerate(points_value):
+        if not isinstance(point, list) or len(point) != 2:
+            raise ValueError(f"{override_path}: waypoint {index} must be [x, y]")
+        converted = [float(point[0]), float(point[1])]
+        if not all(math.isfinite(value) for value in converted):
+            raise ValueError(f"{override_path}: waypoint {index} is not finite")
+        points.append(converted)
+    official_goal = [float(value) for value in task["navigation_goal_xy"]]
+    if any(abs(actual - expected) > 1.0e-6 for actual, expected in zip(points[-1], official_goal)):
+        raise ValueError(f"{override_path}: final waypoint must preserve official goal")
+    yaws_value = payload.get("waypoint_yaws")
+    if yaws_value is None:
+        yaws = waypoint_yaws(points, float(task["operation_station_yaw"] or 0.0))
+    else:
+        if not isinstance(yaws_value, list) or len(yaws_value) != len(points):
+            raise ValueError(f"{override_path}: waypoint_yaws length mismatch")
+        yaws = [float(value) for value in yaws_value]
+        if not all(math.isfinite(value) for value in yaws):
+            raise ValueError(f"{override_path}: waypoint_yaws contains non-finite value")
+    result = dict(task)
+    result["waypoints_xy"] = points
+    result["waypoint_yaws"] = yaws
+    result["route_override_sha256"] = config["route_override_sha256"]
+    result["source"] = dict(task["source"])
+    result["source"]["route_override"] = str(override_path)
+    return result
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--question-root", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument(
+        "--config-dir",
+        type=Path,
+        default=Path(__file__).resolve().parent / "config/tasks",
+    )
     args = parser.parse_args()
 
     question_dirs = sorted(
         args.question_root.glob("Q[0-9][0-9]"), key=lambda path: int(path.name[1:])
     )
-    tasks = [compile_one(path) for path in question_dirs]
+    tasks = []
+    for path in question_dirs:
+        task = compile_one(path)
+        config = load_task_config(args.config_dir, task["question_id"])
+        tasks.append(apply_route_override(task, config))
     if len(tasks) != 24:
         raise RuntimeError(f"expected 24 tasks, found {len(tasks)}")
     payload = {

@@ -2,19 +2,19 @@
   "schema": "m20-nav2-task-config/v1",
   "task_id": "Q06",
   "nav2": {
-    "params_file": "../profiles/nav2_default_v1.yaml",
-    "params_sha256": "13eb68d87e1d27901315188edf381a4c2a3841dcb50b8c65113b573f36451ec6"
+    "params_file": "../profiles/nav2_forward_v1.yaml",
+    "params_sha256": "4ca902f9a74a88b49a740b23e5e5b20dc9ac14c7209a76b62941f203b1bb103d"
   },
   "runner": {
     "vla_action_hz": 2
   },
   "regression": {
-    "navigation_status": "unverified",
-    "navigation_locked": false,
-    "scope": "navigation_stage",
-    "baseline_run": null,
-    "minimum_distance_m": null,
-    "acceptance_distance_m": null,
-    "evidence": null
+    "navigation_status": "passed",
+    "navigation_locked": true,
+    "scope": "full_navigation_task",
+    "baseline_run": "nav2_improvement_20260901_103912_785399012_q06",
+    "minimum_distance_m": 0.0863267153251573,
+    "acceptance_distance_m": 0.25,
+    "evidence": "results_20260901_103912_785399012/Q06"
   }
 }

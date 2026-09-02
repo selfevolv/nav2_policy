@@ -1,0 +1,16 @@
+{
+  "schema": "m20-nav2-route-override/v1",
+  "task_id": "Q09",
+  "map_source": "q09.yaml",
+  "planner": "8-connected A* with 0.50 m collision clearance",
+  "waypoints_xy": [
+    [2.0, -6.0],
+    [2.5, -6.0],
+    [3.0, -5.7],
+    [4.1, -4.8],
+    [6.0, -1.5],
+    [6.0, -0.9],
+    [5.7, -0.4],
+    [5.45, -0.15]
+  ]
+}

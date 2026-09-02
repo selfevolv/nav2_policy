@@ -3,18 +3,28 @@
   "task_id": "Q09",
   "nav2": {
     "params_file": "../profiles/nav2_default_v1.yaml",
-    "params_sha256": "13eb68d87e1d27901315188edf381a4c2a3841dcb50b8c65113b573f36451ec6"
+    "params_sha256": "13eb68d87e1d27901315188edf381a4c2a3841dcb50b8c65113b573f36451ec6",
+    "map": {
+      "yaml_file": "Q09/q09.yaml",
+      "yaml_sha256": "48102508cae188e00374ece82163d19cebf282668b37937183900e8771814e46",
+      "image_file": "Q09/q09.pgm",
+      "image_sha256": "9667af2a631cf04c26699a6d581187b41ce05a2203895cfd28dfa9a110502dc6"
+    }
+  },
+  "navigation": {
+    "route_override_file": "Q09/route_override.json",
+    "route_override_sha256": "13fdae6730b45e22c603ad0be44a60257ace8605f79e566ea68070d13cce3324"
   },
   "runner": {
     "vla_action_hz": 5
   },
   "regression": {
-    "navigation_status": "unverified",
-    "navigation_locked": false,
-    "scope": "navigation_stage",
-    "baseline_run": null,
-    "minimum_distance_m": null,
-    "acceptance_distance_m": null,
-    "evidence": null
+    "navigation_status": "passed",
+    "navigation_locked": true,
+    "scope": "full_navigation_task",
+    "baseline_run": "nav2_improvement_20260901_103912_785399012_q09",
+    "minimum_distance_m": 0.09913346068904709,
+    "acceptance_distance_m": 0.2,
+    "evidence": "results_20260901_103912_785399012/Q09"
   }
 }

@@ -1,0 +1,16 @@
+{
+  "schema": "m20-nav2-route-override/v1",
+  "task_id": "Q05",
+  "map_source": "q05.yaml",
+  "planner": "USD-verified east-side detour around the Q05 crate",
+  "waypoints_xy": [
+    [-42.5, -53.0],
+    [-41.0, -61.0],
+    [-40.0, -70.0],
+    [-42.0, -80.0],
+    [-41.5, -89.8],
+    [-41.5, -93.5],
+    [-43.2, -96.8],
+    [-45.1, -93.9]
+  ]
+}

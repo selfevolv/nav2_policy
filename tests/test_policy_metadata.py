@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from compile_tasks import navigation_acceptance
+from compile_tasks import apply_route_override, navigation_acceptance
 from build_overview_runtime import REPLACEMENTS, build as build_overview_runtime
 from summarize_results import main as summarize_main
 from task_config import load_task_config
@@ -80,11 +80,55 @@ class TaskConfigTests(unittest.TestCase):
                 "navigation_locked"
             ]
         )
-        self.assertFalse(
+        self.assertTrue(
             load_task_config(self.config_dir, "Q05")["regression"][
                 "navigation_locked"
             ]
         )
+
+    def test_forward_profile_is_limited_to_previously_failing_tasks(self) -> None:
+        forward_tasks = {"Q02", "Q05", "Q06", "Q07"}
+        for number in range(1, 25):
+            task_id = f"Q{number:02d}"
+            profile = Path(load_task_config(self.config_dir, task_id)["nav2_params_file"])
+            expected = (
+                "nav2_forward_v1.yaml"
+                if task_id in forward_tasks
+                else "nav2_default_v1.yaml"
+            )
+            self.assertEqual(profile.name, expected)
+
+    def test_q09_uses_hash_locked_task_map_and_route(self) -> None:
+        config = load_task_config(self.config_dir, "Q09")
+        self.assertEqual(Path(config["nav2_map_file"]).name, "q09.yaml")
+        self.assertEqual(Path(config["nav2_map_image_file"]).name, "q09.pgm")
+        self.assertEqual(Path(config["route_override_file"]).name, "route_override.json")
+        project = Path(__file__).resolve().parents[1]
+        official = json.loads((project / "compiled_tasks.json").read_text(encoding="utf-8"))["tasks"]["Q09"]
+        modified = apply_route_override(official, config)
+        self.assertEqual(modified["waypoints_xy"][-1], official["navigation_goal_xy"])
+        self.assertEqual(
+            modified["route_override_sha256"], config["route_override_sha256"]
+        )
+
+    def test_q05_uses_hash_locked_usd_map_and_detour(self) -> None:
+        config = load_task_config(self.config_dir, "Q05")
+        self.assertEqual(Path(config["nav2_map_file"]).name, "q05.yaml")
+        self.assertEqual(Path(config["nav2_map_image_file"]).name, "q05.pgm")
+        self.assertEqual(Path(config["route_override_file"]).name, "route_override.json")
+        project = Path(__file__).resolve().parents[1]
+        official = json.loads((project / "compiled_tasks.json").read_text(encoding="utf-8"))["tasks"]["Q05"]
+        modified = apply_route_override(official, config)
+        self.assertEqual(modified["waypoints_xy"][-1], official["navigation_goal_xy"])
+        self.assertEqual(
+            modified["route_override_sha256"], config["route_override_sha256"]
+        )
+        metadata = json.loads(
+            (project / "config/tasks/Q05/q05.json").read_text(encoding="utf-8")
+        )
+        self.assertTrue(metadata["route_corridor_cleared"])
+        self.assertEqual(metadata["corridor_radius_m"], 1.1)
+        self.assertEqual(metadata["tasks"], ["Q05"])
 
     def test_profile_hash_blocks_silent_shared_parameter_edits(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -136,6 +180,8 @@ class TaskConfigTests(unittest.TestCase):
         self.assertIn('--cidfile "$CID_FILE"', runner)
         self.assertIn('docker stop --time 30 "$RUNNER_CID"', runner)
         self.assertIn('"runner_timed_out": $RUNNER_TIMED_OUT', runner)
+        self.assertIn("NAVIGATION_LOCKED TASK_MAP", runner)
+        self.assertIn('cp "$TASK_MAP" "$RESULT_DIR/nav2_map.yaml"', runner)
 
     def test_debug_views_are_sidecars_only_and_never_enter_submission(self) -> None:
         project = Path(__file__).resolve().parents[1]

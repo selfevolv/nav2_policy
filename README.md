@@ -12,6 +12,42 @@
 - 每道题都运行并保存视频，Runner 任务失败时也保留产物。
 - 第一阶段目标是 24 道题中至少 12 道到达公开路线的导航终点。
 
+## 最新无攻击回归
+
+2026-09-01 使用当前代码、每题独立 Runner/Isaac Sim 进程完成 Q01–Q24 全量回归，
+结果目录为 `results_20260901_192331_535704189/`。24 题均确认
+`attack_mode=off`，总墙钟时间 4 小时 26 分 54 秒。
+
+| 口径 | 结果 | 说明 |
+|---|---:|---|
+| Policy 导航状态 | **16/24（66.7%）** | 以最终 `navigation_status.json` 的 `navigation_reached=true` 为准 |
+| 导航成功且官方文件对有效 | **15/24（62.5%）** | Q16 已导航到达，但 Runner 后续超时、没有正式文件对 |
+| 严格提交级导航 | **14/24（58.3%）** | 再排除 Q15：最小距离 0.2657 m，略高于 0.25 m 几何阈值 |
+| 官方提交文件对 | **17/24** | 17 个 HDF5 均包含 `/metadata` 且 `/data` 中只能有 `demo_0` |
+
+按 Policy 状态成功的任务为 Q01、Q02、Q03、Q05、Q06、Q07、Q13、Q14、Q15、Q16、
+Q18、Q19、Q20、Q22、Q23、Q24。失败分为两类：Q04、Q09 实际进入导航但未到达；
+Q08 因系统 OOM 未启动，Q10–Q12 因官方路线与膨胀障碍相交未启动，Q17/Q21 因官方
+题包攻击索引 SHA-256 不匹配未启动。72 个 `episode/overview/chase` 视频均可解码；
+上述 7 个未完成正式录像的任务使用明确标记的 5 秒诊断占位视频。
+
+与上一份完整无攻击批次 `results_20260831_171329_021058160/` 相比，Policy 导航状态从
+14/24（58.3%）提高到 16/24（66.7%），净增加 2 题；严格提交级结果从 12/24（50.0%）
+提高到 14/24（58.3%）。Q02、Q05、Q06、Q07 由失败转为成功；Q04 因本轮异常提前结束
+而退化，Q08 是 OOM，不属于算法退化。完整逐题数据和限制见
+[TEST_REPORT_20260901.md](TEST_REPORT_20260901.md)。
+
+本轮代码修改包括：
+
+- 新增只向前行驶的版本化 `nav2_forward_v1.yaml`，仅供 Q02/Q05/Q06/Q07 使用；
+- 为 Q05/Q09 新增由 Isaac Sim USD 碰撞几何生成、SHA-256 锁定的单题地图和绕行路线，
+  路线覆盖只能修改中间航点，必须保留官方最终目标；
+- 扩展任务清单校验，统一校验 profile、地图 YAML、PGM 和路线文件，并拒绝路径越出
+  `config/`；
+- 扩展 USD 建图工具的单题模式、端点清理和自定义输出名；Runner 启动时自动选择单题
+  地图，并在结果目录保存实际地图快照；
+- 增加相应单元测试、真实 Runner 测试报告和 Q05 三阶段绕行验证记录。
+
 ## 数据流
 
 ```text
@@ -37,7 +73,9 @@ Runner observation
 ```text
 nav2_policy/
 ├── config/profiles/              # 只增不改的版本化 Nav2 参数 profile
-├── config/tasks/Q01.json…Q24.json # 每题独立配置、频率与回归锁
+├── config/tasks/Q01.json…Q24.json # 每题独立配置、频率、地图/路线引用与回归锁
+├── config/tasks/Q05/             # Q05 的 USD 地图、元数据和东侧绕行路线
+├── config/tasks/Q09/             # Q09 的 USD 地图、元数据和绕行路线
 ├── launch/m20_nav2.launch.py     # 独立地图服务器和 Nav2 bringup
 ├── scripts/                      # 启停、单题和批量执行器
 ├── build_overview_runtime.py     # 从校验过的官方 runtime 构建调试副本
@@ -50,6 +88,7 @@ nav2_policy/
 ├── summarize_results.py          # JSON/Markdown 验收汇总
 ├── tests/                         # 任务元数据与验收单元测试
 ├── TEST_REPORT_20260830.md        # P0 修改与正式 Runner 测试报告
+├── TEST_REPORT_20260901.md        # 隔离优化、Q05 修复与 24 题完整回归
 ├── requirements-policy.txt       # Policy Python 精确依赖
 └── DEPENDENCIES.md               # ROS/Nav2/Isaac/系统依赖
 ```
@@ -101,12 +140,14 @@ QUESTION_TASK_ROOT='/mnt/data/samba/tianchi/2026-具身安全应用挑战赛/que
 
 python compile_tasks.py \
   --question-root "$QUESTION_TASK_ROOT" \
+  --config-dir "$PROJECT_DIR/config/tasks" \
   --output "$PROJECT_DIR/compiled_tasks.json"
 ```
 
 命令必须输出 `COMPILED_TASKS=24`。生成文件含绝对数据路径，因此不提交到 Git；每次
 部署都必须在目标服务器重新生成。任务表保存公开路线、导航阈值和官方运行上限；可调
-动作频率由每题自己的 `config/tasks/Qxx.json` 提供。
+动作频率由每题自己的 `config/tasks/Qxx.json` 提供；存在 hash 锁定的单题路线时，编译器
+只替换中间航点，并强制保留官方最终目标。
 
 ### 4. 校验每题独立配置
 
@@ -115,12 +156,15 @@ python3 task_config.py validate-all
 ```
 
 必须输出 `VALID_TASK_CONFIGS=24`。每个任务配置包含自己的动作频率、Nav2 profile 引用、
-profile SHA-256 和导航回归基线。Q01、Q04、Q14、Q19 当前标记为导航锁定，其中 Q01 是
-旧批次历史成功证据，Q04/Q14/Q19 是 2026-08-30 正式 Runner 成功证据。
+profile SHA-256 和导航回归基线。单题地图和路线也必须放在 `config/tasks/Qxx/` 并由清单
+记录 SHA-256。Q01、Q02、Q04、Q05、Q06、Q07、Q09、Q14、Q19 当前标记为导航锁定；
+最新的 Q02/Q05/Q06/Q07/Q09 证据来自 2026-09-01 隔离优化与 Q05 绕行回归。
+导航锁只表示该配置曾有成功证据，用于避免无意改动；最近完整回归中 Q04 因提前结束、
+Q09 因运行窗口过短未复现成功，不能把锁定状态直接当作最新成功率。
 
 `config/profiles/nav2_default_v1.yaml` 是不可变基线。不得原地修改它；校验器会因 hash
 不匹配拒绝启动。调试失败任务时，应复制成新的版本化 profile，例如
-`nav2_forward_only_v1.yaml`，计算 SHA-256，然后只修改目标任务的 JSON。运行目录还会
+`nav2_forward_v1.yaml`，计算 SHA-256，然后只修改目标任务的 JSON。运行目录还会
 保存实际使用的 `task_config.json` 和 `nav2_params.yaml` 快照。
 
 ### 5. 使用 Isaac Sim USD 建图
@@ -140,6 +184,29 @@ mkdir -p "$PROJECT_DIR/maps"
 
 应生成 `warehouse`、`kitchen`、`market` 三组 `.pgm/.yaml/.json` 文件。源 USD 只读，
 不会被脚本修改。
+
+需要单题地图时，仍复用同一个工具，并把工件归档到该任务路径。Q09 的可复现命令为：
+
+```bash
+mkdir -p "$PROJECT_DIR/config/tasks/Q09"
+
+"$NAV2_ROOT/isaacsim/python.sh" generate_usd_maps.py \
+  --compiled-tasks "$PROJECT_DIR/compiled_tasks.json" \
+  --output-dir "$PROJECT_DIR/config/tasks/Q09" \
+  --task Q09 \
+  --output-name q09 \
+  --corridor-radius 0.0 \
+  --endpoint-clear-radius 0.65
+```
+
+该地图保留 USD 碰撞投影，只清理机器人起点和官方终点的落脚圆盘；不会像共享地图那样
+沿整条公开路线抹除家具。生成后必须更新 Q09 清单中的地图 hash，再重新编译任务表。
+
+Q05 使用同一 USD 投影工具和 `config/tasks/Q05/route_override.json` 中的绕行线生成单题
+地图。其路线走廊为 1.10 m：扣除 Nav2 0.60 m inflation 后保留 0.50 m 纠偏空间，同时
+仍限制在 USD 核验过的料箱与油桶之间。可复现参数为 `--task Q05 --output-name q05
+--margin 5.0 --corridor-radius 1.10 --endpoint-clear-radius 0.65`；生成后同样必须更新地图
+hash 并重新编译任务表。
 
 ### 6. 协议自测
 

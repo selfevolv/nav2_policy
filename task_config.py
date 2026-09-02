@@ -23,6 +23,30 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def resolve_config_file(
+    manifest_path: Path,
+    config_root: Path,
+    value: Any,
+    expected_hash: Any,
+    label: str,
+) -> tuple[Path, str]:
+    """Resolve and hash-check one file that must remain under config/."""
+    if not isinstance(value, str) or not isinstance(expected_hash, str):
+        raise ValueError(f"{manifest_path}: incomplete {label} reference")
+    path = (manifest_path.parent / value).resolve()
+    try:
+        path.relative_to(config_root)
+    except ValueError as error:
+        raise ValueError(f"{manifest_path}: {label} escapes config directory") from error
+    actual_hash = sha256_file(path)
+    if actual_hash != expected_hash:
+        raise ValueError(
+            f"{manifest_path}: {label} hash mismatch; expected {expected_hash}, "
+            f"got {actual_hash}"
+        )
+    return path, actual_hash
+
+
 def load_task_config(config_dir: Path, task_id: str) -> dict[str, Any]:
     task_id = task_id.upper()
     if not TASK_PATTERN.fullmatch(task_id):
@@ -41,17 +65,13 @@ def load_task_config(config_dir: Path, task_id: str) -> dict[str, Any]:
     expected_hash = nav2.get("params_sha256")
     if not isinstance(profile_value, str) or not isinstance(expected_hash, str):
         raise ValueError(f"{manifest_path}: incomplete nav2 profile reference")
-    profile_path = (manifest_path.parent / profile_value).resolve()
-    try:
-        profile_path.relative_to(config_dir.parent)
-    except ValueError as error:
-        raise ValueError(f"{manifest_path}: profile escapes config directory") from error
-    actual_hash = sha256_file(profile_path)
-    if actual_hash != expected_hash:
-        raise ValueError(
-            f"{task_id}: Nav2 profile hash mismatch; expected {expected_hash}, "
-            f"got {actual_hash}. Create a versioned profile instead of editing in place."
-        )
+    profile_path, actual_hash = resolve_config_file(
+        manifest_path,
+        config_dir.parent,
+        profile_value,
+        expected_hash,
+        "profile",
+    )
 
     action_hz = payload.get("runner", {}).get("vla_action_hz")
     if not isinstance(action_hz, int) or action_hz <= 0 or 50 % action_hz:
@@ -61,6 +81,57 @@ def load_task_config(config_dir: Path, task_id: str) -> dict[str, Any]:
     payload["manifest_sha256"] = sha256_file(manifest_path)
     payload["nav2_params_file"] = str(profile_path)
     payload["nav2_params_sha256"] = actual_hash
+
+    map_config = nav2.get("map")
+    if map_config is not None:
+        if not isinstance(map_config, dict):
+            raise ValueError(f"{manifest_path}: nav2.map must be an object")
+        map_path, map_hash = resolve_config_file(
+            manifest_path,
+            config_dir.parent,
+            map_config.get("yaml_file"),
+            map_config.get("yaml_sha256"),
+            "Nav2 map YAML",
+        )
+        image_path, image_hash = resolve_config_file(
+            manifest_path,
+            config_dir.parent,
+            map_config.get("image_file"),
+            map_config.get("image_sha256"),
+            "Nav2 map image",
+        )
+        image_line = next(
+            (
+                line.split(":", 1)[1].strip().strip('"\'')
+                for line in map_path.read_text(encoding="utf-8").splitlines()
+                if line.strip().startswith("image:")
+            ),
+            None,
+        )
+        if image_line is None or (map_path.parent / image_line).resolve() != image_path:
+            raise ValueError(
+                f"{manifest_path}: Nav2 map YAML image does not match image_file"
+            )
+        payload["nav2_map_file"] = str(map_path)
+        payload["nav2_map_sha256"] = map_hash
+        payload["nav2_map_image_file"] = str(image_path)
+        payload["nav2_map_image_sha256"] = image_hash
+
+    navigation = payload.get("navigation", {})
+    if not isinstance(navigation, dict):
+        raise ValueError(f"{manifest_path}: navigation must be an object")
+    route_value = navigation.get("route_override_file")
+    route_hash_value = navigation.get("route_override_sha256")
+    if route_value is not None or route_hash_value is not None:
+        route_path, route_hash = resolve_config_file(
+            manifest_path,
+            config_dir.parent,
+            route_value,
+            route_hash_value,
+            "route override",
+        )
+        payload["route_override_file"] = str(route_path)
+        payload["route_override_sha256"] = route_hash
     return payload
 
 
@@ -94,6 +165,7 @@ def main() -> int:
                         payload["manifest_sha256"],
                         payload["nav2_params_sha256"],
                         "true" if regression.get("navigation_locked") else "false",
+                        payload.get("nav2_map_file", "-"),
                     ]
                 )
             )

@@ -25,7 +25,7 @@ if ! TASK_CONFIG_VALUES=$(python3 "$PROJECT_DIR/task_config.py" \
   echo "Task configuration validation failed: $TASK_ID" >&2
   exit 3
 fi
-IFS=$'\t' read -r TASK_CONFIG NAV2_PARAMS ACTION_HZ TASK_CONFIG_SHA NAV2_PARAMS_SHA NAVIGATION_LOCKED \
+IFS=$'\t' read -r TASK_CONFIG NAV2_PARAMS ACTION_HZ TASK_CONFIG_SHA NAV2_PARAMS_SHA NAVIGATION_LOCKED TASK_MAP \
   <<<"$TASK_CONFIG_VALUES"
 DURATION="${RUNNER_MAX_DURATION_SECONDS:-$DEFAULT_DURATION}"
 RUNNER_TIMEOUT_GRACE_SECONDS="${RUNNER_TIMEOUT_GRACE_SECONDS:-600}"
@@ -63,6 +63,9 @@ fi
 mkdir -p "$CACHE_ROOT/ov" "$CACHE_ROOT/nvidia"
 cp "$TASK_CONFIG" "$RESULT_DIR/task_config.json"
 cp "$NAV2_PARAMS" "$RESULT_DIR/nav2_params.yaml"
+if [[ "$TASK_MAP" != "-" ]]; then
+  cp "$TASK_MAP" "$RESULT_DIR/nav2_map.yaml"
+fi
 RUN_TOKEN="unknown"
 if [[ -s "$RUN_LOG_ROOT/$TASK_ID/run_token" ]]; then
   RUN_TOKEN=$(<"$RUN_LOG_ROOT/$TASK_ID/run_token")

@@ -2,8 +2,9 @@
 """Generate simple Nav2 occupancy maps from Isaac Sim USD collision geometry.
 
 The script must be run with Isaac Sim's python.sh so that pxr and asset resolvers
-match the simulator. Static collision bounds are projected into XY. Public task
-routes then clear a narrow safety corridor to compensate for conservative AABBs.
+match the simulator. Static collision bounds are projected into XY. Shared maps
+can clear a narrow route corridor; task maps may disable that clearing so Nav2
+continues to see furniture and other USD collision geometry.
 """
 
 from __future__ import annotations
@@ -96,6 +97,8 @@ def generate_scene_map(
     resolution: float,
     margin: float,
     corridor_radius: float,
+    endpoint_clear_radius: float = 0.0,
+    output_name: str | None = None,
 ) -> None:
     source = Path(tasks[0]["scene_usd"])
     if any(Path(task["scene_usd"]) != source for task in tasks):
@@ -135,26 +138,43 @@ def generate_scene_map(
         if len(projected_paths) < 200:
             projected_paths.append(prim_path)
 
-    radius_cells = max(1, int(math.ceil(corridor_radius / resolution)))
-    clearing_disk = disk_cells(radius_cells)
-    for route in routes:
-        for x, y in route_samples(route, spacing=resolution * 0.5):
-            center_col = int(round((x - minimum_x) / resolution))
-            center_row = int(round((y - minimum_y) / resolution))
-            for dx, dy in clearing_disk:
-                col = center_col + dx
-                row = center_row + dy
-                if 0 <= col < width and 0 <= row < height:
-                    occupancy[row, col] = False
+    if corridor_radius > 0.0:
+        radius_cells = max(1, int(math.ceil(corridor_radius / resolution)))
+        clearing_disk = disk_cells(radius_cells)
+        for route in routes:
+            for x, y in route_samples(route, spacing=resolution * 0.5):
+                center_col = int(round((x - minimum_x) / resolution))
+                center_row = int(round((y - minimum_y) / resolution))
+                for dx, dy in clearing_disk:
+                    col = center_col + dx
+                    row = center_row + dy
+                    if 0 <= col < width and 0 <= row < height:
+                        occupancy[row, col] = False
+
+    if endpoint_clear_radius > 0.0:
+        endpoint_radius_cells = max(
+            1, int(math.ceil(endpoint_clear_radius / resolution))
+        )
+        endpoint_disk = disk_cells(endpoint_radius_cells)
+        for route in routes:
+            for x, y in (route[0], route[-1]):
+                center_col = int(round((x - minimum_x) / resolution))
+                center_row = int(round((y - minimum_y) / resolution))
+                for dx, dy in endpoint_disk:
+                    col = center_col + dx
+                    row = center_row + dy
+                    if 0 <= col < width and 0 <= row < height:
+                        occupancy[row, col] = False
 
     occupancy[0, :] = True
     occupancy[-1, :] = True
     occupancy[:, 0] = True
     occupancy[:, -1] = True
     output_dir.mkdir(parents=True, exist_ok=True)
-    pgm_path = output_dir / f"{scene}.pgm"
-    yaml_path = output_dir / f"{scene}.yaml"
-    metadata_path = output_dir / f"{scene}.json"
+    artifact_name = output_name or scene
+    pgm_path = output_dir / f"{artifact_name}.pgm"
+    yaml_path = output_dir / f"{artifact_name}.yaml"
+    metadata_path = output_dir / f"{artifact_name}.json"
     write_pgm(pgm_path, occupancy)
     yaml_path.write_text(
         "\n".join(
@@ -183,6 +203,8 @@ def generate_scene_map(
         "projected_collision_prims": projected,
         "occupied_cell_ratio": float(occupancy.mean()),
         "corridor_radius_m": corridor_radius,
+        "route_corridor_cleared": corridor_radius > 0.0,
+        "endpoint_clear_radius_m": endpoint_clear_radius,
         "tasks": [task["question_id"] for task in tasks],
         "sample_collision_prims": projected_paths,
     }
@@ -190,7 +212,7 @@ def generate_scene_map(
         json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     print(
-        f"MAP={scene}|size={width}x{height}|collisions={projected}|"
+        f"MAP={artifact_name}|scene={scene}|size={width}x{height}|collisions={projected}|"
         f"occupied={occupancy.mean():.4f}|yaml={yaml_path}",
         flush=True,
     )
@@ -203,8 +225,34 @@ def main() -> int:
     parser.add_argument("--resolution", type=float, default=0.10)
     parser.add_argument("--margin", type=float, default=3.0)
     parser.add_argument("--corridor-radius", type=float, default=0.65)
+    parser.add_argument("--endpoint-clear-radius", type=float, default=0.0)
+    parser.add_argument(
+        "--task",
+        help="generate only one Qxx task map instead of all shared scene maps",
+    )
+    parser.add_argument(
+        "--output-name",
+        help="artifact basename for --task (defaults to the lower-case task id)",
+    )
     args = parser.parse_args()
     payload = json.loads(args.compiled_tasks.read_text(encoding="utf-8"))
+    if args.task:
+        task_id = args.task.upper()
+        try:
+            task = payload["tasks"][task_id]
+        except KeyError as error:
+            raise ValueError(f"unknown task: {task_id}") from error
+        generate_scene_map(
+            task["scene"],
+            [task],
+            args.output_dir,
+            args.resolution,
+            args.margin,
+            args.corridor_radius,
+            args.endpoint_clear_radius,
+            args.output_name or task_id.lower(),
+        )
+        return 0
     grouped: dict[str, list[dict]] = {}
     for task in payload["tasks"].values():
         grouped.setdefault(task["scene"], []).append(task)
@@ -218,6 +266,7 @@ def main() -> int:
             args.resolution,
             args.margin,
             args.corridor_radius,
+            args.endpoint_clear_radius,
         )
     return 0
 

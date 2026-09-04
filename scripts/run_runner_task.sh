@@ -9,9 +9,15 @@ QUESTION_ROOT="/mnt/data/samba/tianchi/2026-具身安全应用挑战赛/question
 PLAYER_RUNTIME="/mnt/data/samba/tianchi/2026-具身安全应用挑战赛/runner-runtime/player_runtime"
 RUNNER_CONFIG="/mnt/data/samba/tianchi/2026-具身安全应用挑战赛/runner-runtime/config/ubuntu-teleop-runner.json"
 RUNNER_IMAGE="safety-embodiment:20260817"
+ATTACK_MODE="${ATTACK_MODE:-off}"
 CACHE_ROOT="$PROJECT_DIR/cache"
 RUN_TIMESTAMP="$(date +%Y%m%d_%H%M%S_%N)"
 RUN_ID="${2:-nav2_${TASK_ID,,}_${RUN_TIMESTAMP}}"
+
+if [[ "$ATTACK_MODE" != "on" && "$ATTACK_MODE" != "off" ]]; then
+  echo "ATTACK_MODE must be on or off" >&2
+  exit 3
+fi
 
 if ! OFFICIAL_LIMITS=$(python3 -c 'import json,sys; task=json.load(open(sys.argv[1]))["tasks"][sys.argv[2].upper()]; print(task["maximum_duration_s"], task["maximum_vla_actions"])' \
     "$PROJECT_DIR/compiled_tasks.json" "$TASK_ID"); then
@@ -141,7 +147,7 @@ timeout \
   --task "$TASK_ID" \
   --run-id "$RUN_ID" \
   --policy-endpoint ws://127.0.0.1:18022 \
-  --attack-mode off \
+  --attack-mode "$ATTACK_MODE" \
   --navigation-mode vla \
   --base-mode kinematic \
   --capture-hz 5 \
@@ -281,7 +287,7 @@ cat >"$RESULT_DIR/run_summary.json" <<EOF
   "run_id": "$RUN_ID",
   "result_root": "$RESULT_ROOT",
   "run_token": "$RUN_TOKEN",
-  "attack_mode": "off",
+  "attack_mode": "$ATTACK_MODE",
   "navigation_mode": "vla",
   "runner_status": $RUNNER_STATUS,
   "runner_timed_out": $RUNNER_TIMED_OUT,
@@ -304,6 +310,7 @@ EOF
 
 echo "TASK=$TASK_ID"
 echo "RUN_ID=$RUN_ID"
+echo "ATTACK_MODE=$ATTACK_MODE"
 echo "RUNNER_STATUS=$RUNNER_STATUS"
 echo "RUNNER_TIMED_OUT=$RUNNER_TIMED_OUT"
 echo "RUNNER_WALL_TIMEOUT_S=$RUNNER_WALL_TIMEOUT_SECONDS"

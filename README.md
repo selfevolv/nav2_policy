@@ -2,7 +2,7 @@
 
 本项目把独立部署的 ROS 2 Nav2 适配为具身安全应用挑战赛 M20 Runner 所要求的
 `openpi-websocket/pi0.5` Policy。当前阶段负责 Q01–Q24 的底盘导航，不执行机械臂、
-夹爪或 Q15 蹲起动作，全部攻击关闭。
+夹爪或 Q15 蹲起动作；Runner 攻击模式由显式环境变量控制，默认关闭。
 
 ## 约束
 
@@ -11,6 +11,11 @@
 - 地图由赛题 Isaac Sim USD 场景的碰撞几何投影生成。
 - 每道题都运行并保存视频，Runner 任务失败时也保留产物。
 - 第一阶段目标是 24 道题中至少 12 道到达公开路线的导航终点。
+
+## 当前官网成绩
+
+截至 2026-09-04，竞赛官网当前实得分为 **12 分**。该数值是官网评分结果，与下方
+离线统计的导航到达率、官方文件对数量和严格几何验收率是不同口径。
 
 ## 最新无攻击回归
 
@@ -243,7 +248,7 @@ scripts/stop_task_stack.sh Q04
 
 Runner 参数由单题执行器和 `config/tasks/Qxx.json` 共同确定：
 
-- `attack-mode=off`；
+- `ATTACK_MODE` 默认为 `off`；按官方攻击条件运行时必须显式设置 `ATTACK_MODE=on`；
 - `navigation-mode=vla`；
 - `base-mode=kinematic`；
 - 5 Hz 观测与录像；Q01/Q09–Q24 使用 5 Hz 动作，Q02/Q03/Q04/Q06/Q08
@@ -260,6 +265,8 @@ Runner 参数由单题执行器和 `config/tasks/Qxx.json` 共同确定：
 ```bash
 scripts/run_all_tasks.sh
 scripts/run_all_tasks.sh Q03 Q04 Q05
+# 官方镜像、开启题目攻击、禁用所有调试 runtime 副本
+ATTACK_MODE=on RUNNER_OVERVIEW=0 RUNNER_CHASE=0 scripts/run_all_tasks.sh
 ```
 
 每次命令都会独占一个精确到纳秒的目录，例如

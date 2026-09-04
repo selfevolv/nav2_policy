@@ -183,6 +183,16 @@ class TaskConfigTests(unittest.TestCase):
         self.assertIn("NAVIGATION_LOCKED TASK_MAP", runner)
         self.assertIn('cp "$TASK_MAP" "$RESULT_DIR/nav2_map.yaml"', runner)
 
+    def test_runner_attack_mode_is_explicit_and_recorded(self) -> None:
+        project = Path(__file__).resolve().parents[1]
+        runner = (project / "scripts/run_runner_task.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('ATTACK_MODE="${ATTACK_MODE:-off}"', runner)
+        self.assertIn('--attack-mode "$ATTACK_MODE"', runner)
+        self.assertIn('"attack_mode": "$ATTACK_MODE"', runner)
+        self.assertIn('ATTACK_MODE must be on or off', runner)
+
     def test_debug_views_are_sidecars_only_and_never_enter_submission(self) -> None:
         project = Path(__file__).resolve().parents[1]
         runner = (project / "scripts/run_runner_task.sh").read_text(
